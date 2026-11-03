@@ -462,7 +462,9 @@ def live_fragment() -> None:
     else:
         snap = engine.get_snapshot()
         if snap.error:
-            st.caption(f"Recognition error: {snap.error}")
+            st.warning(f"Camera/recognition issue: {snap.error}")
+        if snap.frame_rgb is None:
+            frame_placeholder.info("Starting camera... this can take a few seconds.")
         if snap.frame_rgb is not None:
             display_frame = snap.frame_rgb
             if snap.mode == "mouse" and snap.mouse_status and snap.mouse_status.pointer_norm:

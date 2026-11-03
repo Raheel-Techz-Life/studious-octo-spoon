@@ -210,13 +210,38 @@ class InteractionEngine:
         frame_count = 0
         fps_window_start = time.monotonic()
         fps = 0.0
+        first_failure_at: float | None = None
 
         while not self._stop_event.is_set():
             frame_result = self.camera.read()
             if not frame_result.ok:
+                now = time.monotonic()
+                if first_failure_at is None:
+                    first_failure_at = now
+                stalled_s = now - first_failure_at
+                # A handful of failed reads right after opening is normal -
+                # some Windows DirectShow drivers take a moment to start
+                # streaming. But with no sleep here at all, this loop would
+                # busy-spin a full CPU core, which can itself starve the
+                # camera driver's own thread and keep it from ever producing
+                # a frame - turning a transient warm-up delay into a
+                # permanent hang. Back off, and after a real timeout surface
+                # a clear, visible error instead of spinning silently
+                # forever (which looked like "camera never opens").
+                time.sleep(0.05)
                 with self._snap_lock:
-                    self._snapshot.error = frame_result.error
+                    self._snapshot.tracking = True
+                    if stalled_s > 5.0:
+                        self._snapshot.error = (
+                            f"{frame_result.error} (no frame in {stalled_s:.0f}s - "
+                            "check Windows Settings > Privacy & security > Camera > "
+                            "Let desktop apps access your camera, and that no other "
+                            "app is using the webcam)"
+                        )
+                    else:
+                        self._snapshot.error = frame_result.error
                 continue
+            first_failure_at = None
 
             frame_bgr = frame_result.frame_bgr
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
