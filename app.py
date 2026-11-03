@@ -28,10 +28,12 @@ from core.event_logger import EventLogger
 from core.gesture_controller import COMMANDS, DEFAULT_MAPPING, GestureController
 from core.interaction_engine import InteractionEngine
 from core.launcher_controller import LauncherConfig, LauncherController
+from core.magic_effects import MagicConfig, MagicEffectState
 from core.mouse_controller import MouseConfig, MouseController
 from core.spatial_keyboard import KeyboardConfig, KeyboardController
 from core.stabilization import GestureStabilizer, StabilizationConfig
 from ui import components
+from ui.magic_overlay import draw_magic_overlay
 from ui.styles import CSS
 from utils.audio_feedback import AudioFeedback
 from utils.metrics import events_to_dataframe, summarize
@@ -53,6 +55,7 @@ MODE_LABELS = {
     "mouse": "Mouse (pointer control)",
     "keyboard": "Keyboard (spatial typing)",
     "launcher": "Launcher (open apps)",
+    "magic": "Magic (circle for effects)",
     "paused": "Paused",
 }
 
@@ -86,6 +89,8 @@ def init_state() -> None:
         # Launcher mode settings
         "launcher_smoothing": 0.4,
         "launcher_mirror": True,
+        # Magic mode settings
+        "magic_rotation_speed": 70.0,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -114,6 +119,7 @@ def init_state() -> None:
             smoothing_alpha=st.session_state.launcher_smoothing,
             mirror_x=st.session_state.launcher_mirror,
         ))
+        magic_state = MagicEffectState(MagicConfig())
         st.session_state.engine = InteractionEngine(
             controller=st.session_state.controller,
             event_logger=st.session_state.event_logger,
@@ -121,6 +127,7 @@ def init_state() -> None:
             mouse_controller=mouse_controller,
             keyboard_controller=keyboard_controller,
             launcher_controller=launcher_controller,
+            magic_state=magic_state,
         )
 
 
@@ -323,6 +330,17 @@ def render_sidebar() -> None:
                             st.rerun()
 
         st.markdown("---")
+        st.markdown("#### Magic mode")
+        st.caption(
+            "Trace a full circle with your hand to trigger a burst. Switching "
+            "to this mode is the deliberate activation step; switch away to exit."
+        )
+        magic: MagicEffectState = engine.magic_state
+        st.session_state.magic_rotation_speed = st.slider(
+            "Idle ring rotation speed (deg/s)", 20.0, 180.0, st.session_state.magic_rotation_speed, 10.0)
+        magic.config.idle_rotation_speed_deg_s = st.session_state.magic_rotation_speed
+
+        st.markdown("---")
         st.session_state.audio_on = st.toggle(
             "Audio feedback", value=st.session_state.audio_on,
             disabled=not st.session_state.audio.available,
@@ -341,6 +359,7 @@ def render_sidebar() -> None:
             engine.keyboard_controller.clear_text()
             engine.launcher_controller.reset()
             engine.dynamic_detector.reset()
+            engine.magic_state.reset()
 
         st.markdown("---")
         st.markdown("#### Gesture mapping (Navigation mode)")
@@ -376,6 +395,8 @@ def live_fragment() -> None:
             elif snap.mode == "launcher" and snap.launcher_status and snap.launcher_status.pointer_norm:
                 display_frame = _draw_pointer_overlay(
                     snap.frame_rgb, snap.launcher_status.pointer_norm, snap.launcher_status.pinching)
+            elif snap.mode == "magic" and snap.magic_status:
+                display_frame = draw_magic_overlay(snap.frame_rgb, snap.magic_status)
             frame_placeholder.image(display_frame, channels="RGB", use_container_width=True)
 
         if snap.mode == "navigation":
@@ -459,6 +480,18 @@ def live_fragment() -> None:
             else:
                 components.launcher_panel(entries, ls.highlighted_app_id if ls else None,
                                            ls.pinching if ls else False)
+
+        elif snap.mode == "magic":
+            ms = snap.magic_status
+            with status_col1:
+                components.stat("Hand tracking", "Yes" if ms and ms.tracking else "No")
+            with status_col2:
+                components.stat("Intensity", f"{ms.intensity:.2f}" if ms else "0.00")
+            with status_col3:
+                if ms and ms.bursting:
+                    st.markdown(components.pill("Casting!", "ok"), unsafe_allow_html=True)
+            if ms and not ms.tracking:
+                st.caption("Show your hand to the camera, then trace a full circle to cast.")
 
         elif snap.mode == "paused":
             st.info("Tracking is paused. No commands or pointer actions will fire.")

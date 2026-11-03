@@ -11,10 +11,10 @@ repeatedly.
 
 **Status:** the Navigation-mode MVP (gesture → in-app command), the Mouse
 mode spatial pointer (Priority 1), the app Launcher (Priority 2), the
-Keyboard mode spatial typing (Priority 3), and swipe/circle dynamic
-gestures (Priority 4) from the advanced-features roadmap are implemented
-and tested. Magic Mode, expressive signs, and face+hand interaction are
-**not yet built** —
+Keyboard mode spatial typing (Priority 3), swipe/circle dynamic gestures
+(Priority 4), and Magic Mode (Priority 5) from the advanced-features
+roadmap are implemented and tested. Expressive signs and face+hand
+interaction are **not yet built** —
 see the Progress checklist below for exactly what's done.
 
 ## Why
@@ -95,11 +95,13 @@ gesturebridge/
 │   ├── launcher_controller.py    # pointer->highlight->pinch-to-launch state machine
 │   ├── keyboard_layout.py        # compact QWERTY layout as normalized key rects
 │   ├── spatial_keyboard.py       # pointer->highlight->pinch-to-type state machine
+│   ├── magic_effects.py          # Magic Mode's state machine (idle glow + circle-triggered burst)
 │   ├── pointer_filter.py         # exponential smoothing for the cursor
 │   ├── interaction_engine.py     # background tracking thread, owns camera+recognizer
 │   └── event_logger.py           # bounded, thread-safe in-memory event history
 ├── ui/
 │   ├── components.py              # Streamlit UI fragments (keyboard + launcher panels)
+│   ├── magic_overlay.py            # Magic Mode's OpenCV rendering (ring/runes/particles)
 │   └── styles.py                   # dark, high-contrast theme CSS
 ├── utils/
 │   ├── metrics.py                  # pandas aggregation for analytics
@@ -111,7 +113,9 @@ gesturebridge/
     ├── test_mouse_controller.py
     ├── test_app_launcher.py
     ├── test_launcher_controller.py
-    └── test_spatial_keyboard.py
+    ├── test_spatial_keyboard.py
+    ├── test_magic_effects.py
+    └── test_magic_overlay.py
 ```
 
 **Data flow (Navigation mode):** `camera.py` grabs a frame → `recognizer.py`
@@ -147,6 +151,16 @@ looks up which `keyboard_layout.py` key the smoothed pointer is over, and on
 pinch-release commits that key to an in-app text buffer rather than calling
 any OS API. The UI renders the layout as a styled grid via
 `ui/components.py::keyboard_panel`.
+
+**Data flow (Magic mode):** same camera + recognizer again; the wrist
+position feeds `magic_effects.py`, which reuses `dynamic_gestures.py`'s
+circle detector internally (not Navigation mode's instance - a separate
+one, so the two modes' cooldowns never interfere) to decide when to start
+a burst, and tracks idle rotation phase, speed-driven intensity, and
+particle positions purely as numbers. `ui/magic_overlay.py` then reads
+that state and draws it onto the frame with OpenCV - rendering is fully
+separated from the state machine specifically so the animation's timeline
+could be unit-tested without touching a single pixel.
 
 ### Why there's now a background tracking thread
 
@@ -332,6 +346,51 @@ gesture has **not** been exercised by a human yet. macOS discovery/launch
 is implemented but entirely untested — this session only had a Windows
 machine to verify against.
 
+## Magic mode
+
+Switching to Magic mode is itself the deliberate activation step the
+project brief asks for. A soft amber glow (a rotating dashed ring plus
+small rotating rune-like marks, drawn with OpenCV directly onto the camera
+feed - original fantasy visuals, nothing copied from any film) follows
+your hand continuously. Trace a full circle and it triggers a burst:
+particles scatter outward from the circle's center and an expanding ring
+fades out over about 1.4 seconds.
+
+| Action | Effect |
+|---|---|
+| Show your hand | A soft idle glow ring appears, anchored on and following your hand |
+| Move your hand faster | The glow intensifies (brighter/larger) in response to hand speed |
+| Trace a full circle | Triggers a particle burst + expanding ring from the circle's center |
+| Switch to another mode | Exits Magic mode; glow and any in-progress burst are cleared |
+
+The circle detection is the *exact same* geometric detector Navigation
+mode's dynamic gestures use (`core/dynamic_gestures.py`) - Magic mode
+doesn't reimplement motion analysis, it just reacts differently to the
+same detected event. The animation's state (hand position, rotation
+phase, particle positions, burst progress) is tracked in
+`core/magic_effects.py`, deliberately separated from the actual drawing
+code in `ui/magic_overlay.py`, so the whole timeline - speed-driven
+intensity, particle motion outward from the burst center, burst
+progress reaching 1.0 and clearing - is unit-testable without rendering
+a single pixel.
+
+**What has and hasn't been verified:** 15 unit tests (12 for the state
+machine with a fake clock, 3 rendering smoke tests confirming the overlay
+never crashes and always returns a correctly-shaped frame) all pass.
+Live-verified with a real hand in front of the camera: Hand tracking
+correctly read "Yes" with Intensity climbing to 1.00 on fast movement and
+settling near the 0.15 baseline when still, and correctly dropped to "No"
+tracking / 0.15 baseline the instant the hand left frame - confirming the
+speed-to-intensity response and hand-loss reset both work against real
+input, not just synthetic test data. What I could *not* independently
+verify live: actually tracing a full circle and watching the burst fire,
+since doing that requires a second pair of hands at the keyboard and the
+camera at once. The underlying circle detector itself is already
+real-camera-tested indirectly (Navigation mode's dynamic gestures use the
+identical detector), and the burst logic is fully covered by synthetic
+circular-trajectory unit tests, but the literal "wave a hand in a circle
+and see the burst" moment is the one piece still waiting on a human.
+
 ## Keyboard mode
 
 The index fingertip moves a selection cursor over a virtual QWERTY layout
@@ -464,24 +523,35 @@ human-verified live.**
 - [x] A real latent bug found and fixed during testing: the cooldown gate compared against a `0.0` sentinel for "no gesture yet," which could wrongly suppress a detector's very first gesture if `now` happened to be small — invisible with the real `time.monotonic()` clock (always large) but reproducible with a fake clock, so worth fixing properly rather than dismissing as a test artifact
 - [ ] **Not yet verified: an actual human swiping or circling in front of a real camera.** Thresholds are reasoned defaults, not tuned against real hand motion.
 
-**Priorities 5-7 — Magic Mode, expressive hand signs, face+hand
-interaction: not started.** This is a genuinely large scope (the roadmap
-itself lays out 10 implementation phases); Priorities 1-4, done properly
-with real tests rather than code that merely compiles, were the
-right-sized units of work to land solidly in one pass each. See the
-roadmap's own "Implementation order" for the next suggested phase (G:
-Magic Mode) — which can reuse `dynamic_gestures.py`'s circle detector
-directly for its signature circular-gesture trigger.
+**Priority 5 — Magic Mode: implemented and unit-tested, partially
+human-verified live.**
+- [x] Deliberate activation via the Mode selector itself (switching to Magic mode is the activation step the brief asks for; switching away exits and clears all state)
+- [x] Idle glow ring anchored on and following the hand, continuously rotating (`core/magic_effects.py`)
+- [x] Effect intensity driven by real hand movement speed (brighter/larger on fast motion, settles to a baseline when still)
+- [x] Circular hand movement triggers a particle burst + expanding fading ring, reusing `dynamic_gestures.py`'s geometric circle detector directly rather than reimplementing motion analysis (a separate detector instance from Navigation mode's, so the two modes' cooldowns never cross-contaminate)
+- [x] Original, generic fantasy visuals only (rotating dashed ring, small triangular rune marks, outward particles) — nothing copied from any specific film; drawn with lightweight OpenCV overlays directly on the camera frame, matching the roadmap's "no heavyweight 3D engine" guidance
+- [x] State machine (hand position, rotation phase, particle physics, burst progress) deliberately separated from rendering (`ui/magic_overlay.py`), so the whole animation timeline is unit-testable without rendering a single pixel
+- [x] 15 unit tests (12 state-machine tests with a fake clock, 3 rendering smoke tests) — 87 total now passing
+- [x] Live-verified with a real hand: "Hand tracking: Yes" with Intensity correctly climbing to 1.00 on fast movement and settling near baseline when still, correctly dropping to "No"/baseline the instant the hand left frame
+- [ ] **Not yet verified: actually tracing a full circle and watching the burst fire live.** Needs a second pair of hands at the keyboard and the camera simultaneously; the burst logic itself is fully covered by synthetic-trajectory unit tests, and the identical circle detector is already exercised against real camera input via Navigation mode's dynamic gestures, but the literal "wave a circle, see sparks" moment is still unconfirmed by a human.
+- [x] Two-hand activation pose (brief's "where practical" optional item) intentionally skipped — the recognizer is configured for single-hand tracking throughout the app, and adding a second hand is a bigger architecture change than this priority's scope justified
+
+**Priorities 6-7 — Expressive hand signs, face+hand interaction: not
+started.** This is a genuinely large scope (the roadmap itself lays out 10
+implementation phases); Priorities 1-5, done properly with real tests
+rather than code that merely compiles, were the right-sized units of work
+to land solidly in one pass each. See the roadmap's own "Implementation
+order" for the next suggested phase (H: expressive hand signs).
 
 **Priority 8 — Unified interaction modes: partially done.** A `Mode` selector
-(Navigation / Mouse / Keyboard / Launcher / Paused) exists and is enforced
-at the engine level — switching modes resets the other modes' in-flight
-gesture state (a held pinch doesn't carry into Navigation mode, a
+(Navigation / Mouse / Keyboard / Launcher / Magic / Paused) exists and is
+enforced at the engine level — switching modes resets the other modes'
+in-flight gesture state (a held pinch doesn't carry into Navigation mode, a
 half-stabilized gesture doesn't carry into Mouse/Keyboard/Launcher mode,
 typed text and launch-feedback survive a switch but a mid-pinch doesn't
-commit), and only one mode's actions can fire at a time. The remaining
-modes (Expressive, Magic, Face+Hand) don't exist yet to integrate into this
-switcher.
+commit, a cleared burst doesn't come back), and only one mode's actions
+can fire at a time. The remaining modes (Expressive, Face+Hand) don't
+exist yet to integrate into this switcher.
 
 **Earlier MVP work (still intact, Navigation mode unchanged):**
 - [x] Camera open/read/release with clear error reporting (`core/camera.py`)
@@ -491,22 +561,34 @@ switcher.
 - [x] Full Streamlit UI: header, live feed, sidebar controls, gesture mapping panel, event history, analytics, manual fallback demo
 - [x] Verified end-to-end against a real webcam in an earlier pass of this session; 3 real UI-staleness/leak bugs found and fixed then (see git history)
 
-**Known bugs:** none open.
+**Known bugs:** none open. One known **environment-specific quirk**, not
+an application bug (see Troubleshooting): under this project's automated
+browser test harness specifically, the live camera `<img>` sometimes fails
+to finish loading before the next ~150ms fragment tick replaces it,
+because that harness's own fetch/decode overhead is slower than a normal
+browser's. Root-caused with an isolated minimal Streamlit+OpenCV
+reproduction outside this app entirely (confirmed the identical race
+exists with zero GestureBridge code involved), so it isn't believed to
+affect a normal end-user browser — but it means some of this session's
+live-verification screenshots show the status panels working correctly
+without the video frame itself visibly rendered.
 
 **To run it:** `streamlit run app.py` (see Setup/Running above).
 
 **Demo readiness:** Navigation mode's static gestures are demonstrable
 end-to-end as before, and its dynamic swipe/circle detection has a
 confirmed-working dispatch path (headless-verified) layered on top. Mouse,
-Launcher, and Keyboard mode's code and unit tests are solid, and all three
-render and switch correctly live, but all four features (dynamic gestures
-included) need a human to actually move/click/launch/type/swipe/circle with
-a real hand before calling them demo-ready — thresholds and sensitivity
+Launcher, Keyboard, and Magic mode's code and unit tests are solid, and all
+four render and switch correctly live — Magic mode's idle glow and
+speed-driven intensity were confirmed against a real hand — but all five
+features need a human to actually move/click/launch/type/swipe/circle with
+a real hand before calling them fully demo-ready — thresholds and sensitivity
 defaults are reasoned guesses, not tuned against real motion.
 
 **Next highest-priority task:** get a human to try Mouse, Launcher,
-Keyboard, and the new dynamic gestures live and tune them, then continue to
-Priority 5 (Magic Mode) per the roadmap's implementation order.
+Keyboard, Magic mode, and the dynamic gestures live and tune them, then
+continue to Priority 6 (expressive hand signs) per the roadmap's
+implementation order.
 
 ## Troubleshooting
 
@@ -539,3 +621,16 @@ Priority 5 (Magic Mode) per the roadmap's implementation order.
 - **Launcher does nothing on macOS** — macOS support (`open -a <name>`) is
   implemented but has not been tested in this project's development
   session (Windows-only environment); please report back what you find.
+- **Camera feed shows blank/doesn't render, but status text (hand
+  tracking, intensity, gesture) updates correctly** — this was observed
+  during this project's own development under its automated browser test
+  harness: the harness's own image fetch/decode is sometimes slower than
+  the ~150ms fragment refresh, so each frame's `<img>` request gets
+  superseded before it finishes loading. Confirmed with a minimal
+  Streamlit+OpenCV reproduction completely outside this app (same race,
+  zero GestureBridge code), so it's believed to be specific to that
+  testing tool rather than a real browser. If you see this in an actual
+  browser, try a hard refresh, or lower Streamlit's fragment update rate
+  (the `run_every=0.15` argument in `app.py`'s `live_fragment`) and see if
+  that resolves it — if so, please report it, since that would mean the
+  issue is broader than this session's testing environment.
