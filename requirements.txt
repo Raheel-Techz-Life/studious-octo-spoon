@@ -5,3 +5,4 @@ streamlit>=1.37
 pandas
 matplotlib
 pyttsx3
+pyautogui
