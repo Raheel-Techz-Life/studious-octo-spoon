@@ -9,13 +9,16 @@ either in-app navigation commands or real OS pointer control, with a
 stabilization layer that prevents a single held gesture from firing
 repeatedly.
 
-**Status:** the Navigation-mode MVP (gesture → in-app command), the Mouse
-mode spatial pointer (Priority 1), the app Launcher (Priority 2), the
-Keyboard mode spatial typing (Priority 3), swipe/circle dynamic gestures
-(Priority 4), Magic Mode (Priority 5), and expressive celebration signs
-(Priority 6) from the advanced-features roadmap are implemented and
-tested. Face+hand interaction is **not yet built** — see the Progress
-checklist below for exactly what's done.
+**Status:** every priority in the advanced-features roadmap is now
+implemented and tested — the Navigation-mode MVP (gesture → in-app
+command), the Mouse mode spatial pointer (Priority 1), the app Launcher
+(Priority 2), Keyboard mode spatial typing (Priority 3), swipe/circle
+dynamic gestures (Priority 4), Magic Mode (Priority 5), expressive
+celebration signs (Priority 6), and finger-heart/kiss Face+Hand
+interaction (Priority 7). That does **not** mean everything has been
+tried by a human with a real hand and face in front of the camera — see
+the Progress checklist below for exactly what's been verified versus
+what's still a reasoned-but-untested default.
 
 ## Why
 
@@ -86,6 +89,7 @@ gesturebridge/
 ├── core/
 │   ├── camera.py                 # webcam open/read/release, error-safe
 │   ├── recognizer.py             # MediaPipe GestureRecognizer wrapper
+│   ├── face_recognizer.py        # MediaPipe FaceLandmarker wrapper (Face+Hand mode only)
 │   ├── hand_landmarks.py         # named landmark indices + geometry helpers
 │   ├── gesture_controller.py     # gesture -> in-app command mapping + dispatch
 │   ├── stabilization.py          # hold-to-confirm + cooldown logic (Navigation mode)
@@ -97,6 +101,7 @@ gesturebridge/
 │   ├── spatial_keyboard.py       # pointer->highlight->pinch-to-type state machine
 │   ├── magic_effects.py          # Magic Mode's state machine (idle glow + circle-triggered burst)
 │   ├── expressive_signs.py       # celebration-sign registry + trigger engine (Expressive mode)
+│   ├── face_hand_interaction.py  # finger-heart + kiss-sequence detection (Face+Hand mode)
 │   ├── pointer_filter.py         # exponential smoothing for the cursor
 │   ├── interaction_engine.py     # background tracking thread, owns camera+recognizer
 │   └── event_logger.py           # bounded, thread-safe in-memory event history
@@ -104,6 +109,7 @@ gesturebridge/
 │   ├── components.py              # Streamlit UI fragments (keyboard + launcher panels)
 │   ├── magic_overlay.py            # Magic Mode's OpenCV rendering (ring/runes/particles)
 │   ├── expressive_overlay.py       # Expressive mode's OpenCV rendering (confetti/heart)
+│   ├── face_hand_overlay.py        # Face+Hand mode's OpenCV rendering (floating hearts)
 │   └── styles.py                   # dark, high-contrast theme CSS
 ├── utils/
 │   ├── metrics.py                  # pandas aggregation for analytics
@@ -119,7 +125,9 @@ gesturebridge/
     ├── test_magic_effects.py
     ├── test_magic_overlay.py
     ├── test_expressive_signs.py
-    └── test_expressive_overlay.py
+    ├── test_expressive_overlay.py
+    ├── test_face_hand_interaction.py
+    └── test_face_hand_overlay.py
 ```
 
 **Data flow (Navigation mode):** `camera.py` grabs a frame → `recognizer.py`
@@ -177,6 +185,20 @@ that pose is a registered sign → if so, spawns either confetti particles
 pulsing-heart timer. `ui/expressive_overlay.py` reads that state and draws
 it, again fully separated from the state machine for the same testability
 reason as Magic mode.
+
+**Data flow (Face+Hand mode):** the one mode that runs *two* recognizers.
+`camera.py` still grabs the frame and `recognizer.py` still runs for hand
+landmarks, but this mode also lazily creates `face_recognizer.py`'s
+FaceLandmarker (only here, only while active) and runs it on the same
+frame for face landmarks. Both landmark sets go to
+`face_hand_interaction.py`: hand landmarks alone decide the finger-heart
+pose (dispatched through the same `ExpressiveEngine` Expressive mode
+uses), while hand *and* face landmarks together decide the kiss sequence
+(proximity to the mouth plus a held pinch - never proximity alone).
+`ui/face_hand_overlay.py` draws both effects, reusing Expressive mode's
+renderer for the heart pulse and reusing its heart-curve math (factored
+out of `ui/expressive_overlay.py`) for the floating hearts, rather than
+drawing a heart shape a third time.
 
 ### Why there's now a background tracking thread
 
@@ -446,6 +468,75 @@ in front of the camera and watching the effect fire has **not** been
 exercised by a human yet - same gap as every other spatial mode in this
 project, for the same reason (no physical hands here to test with).
 
+## Face+Hand mode
+
+Two interactions, both deliberately requiring more than a bare landmark
+position before anything fires - the project brief is explicit that
+"hand proximity to the face alone must not trigger the effect," and this
+mode is built around that constraint, not just aware of it:
+
+| Gesture | Effect |
+|---|---|
+| Finger-heart (thumb+index pinched into a small loop, other three fingers curled) | A heart pulse - works with just your hand, no face needed |
+| Hold that same pinch near your mouth briefly | Floating hearts drift upward and fade |
+
+The finger-heart pose isn't in the MediaPipe model's static gesture
+vocabulary (unlike the signs Expressive mode uses), so it's detected
+directly from hand landmark geometry instead: a tight thumb-index pinch
+*and* the other three fingers staying curled - that second check is what
+tells it apart from an ordinary pinch (e.g. Mouse mode's click), which
+only requires the first. The kiss effect requires proximity to the mouth
+**and** that same pinch held for a short dwell time together - proximity
+by itself, even sustained, never triggers anything, exactly per the
+brief's explicit warning against inferring intent from a landmark
+position alone.
+
+**Privacy, structurally enforced, not just described:**
+- Face tracking uses `mediapipe`'s FaceLandmarker with
+  `output_face_blendshapes=False` - this wrapper (`core/face_recognizer.py`)
+  never requests or sees expression data, so no code path here *could* be
+  used for emotion inference even by accident, let alone identity.
+- The model only ever outputs landmark *positions* - a geometric point
+  cloud, never an identity embedding - so "doesn't identify anyone" holds
+  because there's nothing in the output that could identify someone, not
+  because of a policy choice layered on top.
+- Face tracking is lazily created only when Face+Hand mode becomes active,
+  and torn down (model closed, reference dropped) the instant the mode is
+  left - confirmed with a headless test that checked
+  `engine.face_recognizer is None` before entering the mode, `is not None`
+  while active, and `is None` again immediately after switching away. This
+  is "stops processing when disabled" as an actual resource lifecycle, not
+  a flag that's merely ignored.
+- Nothing is written to disk by any of this; frames and landmarks only
+  ever live in memory for the current call.
+
+Finger-heart's hold-to-confirm and cooldown reuse Expressive mode's
+`ExpressiveEngine` directly (fed a synthetic `"FingerHeart"` label when
+the geometry matches) rather than a fourth reimplementation of that
+pattern; its heart-pulse rendering is also reused as-is. The kiss
+sequence - a joint condition over two separate landmark sets, not
+reducible to a single pose label - gets its own small dwell+cooldown
+state machine (`core/face_hand_interaction.py`), and its floating hearts
+reuse the same parametric heart-curve math Expressive mode's pulse uses
+(factored into a shared `ui/expressive_overlay.py::heart_points()` rather
+than duplicated).
+
+**What has and hasn't been verified:** 15 unit tests (12 for the
+detection/trigger logic with a fake clock and synthetic hand+face
+landmarks, 3 rendering smoke tests) all pass - including that proximity
+without the pinch, and the pinch without proximity, both correctly never
+trigger the kiss effect. The FaceLandmarker model itself was verified
+live: it downloaded correctly (3.7MB, a real model file, not an error
+page), initialized, and in a live browser session with a real face in
+front of the camera, the status panel correctly read **"Face Tracking:
+Yes."** A separate headless test confirmed the lazy load/unload lifecycle
+works exactly as designed against the real model, not just in theory. The
+two gesture *sequences* themselves - actually making a finger-heart, and
+actually holding a confirmed pinch near a mouth for the kiss effect -
+have **not** been performed by a human yet, so their threshold tuning
+(pinch tightness, proximity radius, dwell time) is a reasoned default,
+not a calibrated one.
+
 ## Keyboard mode
 
 The index fingertip moves a selection cursor over a virtual QWERTY layout
@@ -604,25 +695,30 @@ human-verified live.**
 - [x] Live-verified: the mode switches in cleanly, the sign-registry sidebar checkboxes render and the status panel correctly lists registered signs; a headless integration test confirmed the engine starts in Expressive mode and stays correctly inert (no false triggers) with no hand in frame
 - [ ] **Not yet verified: an actual human holding a real Thumbs Up / Victory / I-Love-You sign and watching the effect fire.** Same gap as every other spatial mode in this project, for the same reason.
 
-**Priority 7 — Face+hand interaction: not started.** This is a genuinely
-large scope (the roadmap itself lays out 10 implementation phases);
-Priorities 1-6, done properly with real tests rather than code that merely
-compiles, were the right-sized units of work to land solidly in one pass
-each. See the roadmap's own "Implementation order" for the final suggested
-phase (I: face+hand interaction) — note its own privacy constraints
-(no identification, no emotion recognition, no unnecessary retention)
-before starting it.
+**Priority 7 — Face+hand interaction: implemented and unit-tested, the
+live camera/model integration itself verified, the gesture sequences
+themselves not yet human-verified.**
+- [x] FaceLandmarker integration (`core/face_recognizer.py`) with `output_face_blendshapes=False` so no expression/emotion data is ever requested, let alone used — this is a structural guarantee, not a policy layered on top
+- [x] Face tracking only ever runs while Face+Hand mode is active: the model is lazily created on mode entry and closed on mode exit, inside the one background thread that owns it (no cross-thread resource race) — confirmed with a headless test checking `engine.face_recognizer` is `None` before, not-`None` during, and `None` again immediately after leaving the mode
+- [x] Finger-heart pose detected from hand landmark geometry directly (not a MediaPipe static-gesture label, since that pose isn't in the model's vocabulary) — a tight thumb-index pinch *and* the other three fingers staying curled, which is what tells it apart from an ordinary pinch like Mouse mode's click
+- [x] Kiss sequence requires proximity to the mouth **and** a held confirmation pinch together — proximity alone, even sustained, never triggers anything, directly satisfying the brief's explicit warning against inferring intent from a landmark position alone
+- [x] Finger-heart reuses `core/expressive_signs.py`'s `ExpressiveEngine` directly (fed a synthetic `"FingerHeart"` label) rather than a fourth hold+cooldown reimplementation; the kiss sequence's floating hearts reuse the same heart-curve math Expressive mode's pulse uses, factored into one shared function
+- [x] No identification (the model only outputs landmark positions, nothing identity-related exists to extract), no emotion recognition (by construction — blendshapes are never requested), nothing written to disk
+- [x] 15 unit tests (12 detection/trigger logic with a fake clock and synthetic hand+face landmarks, 3 rendering smoke tests) — 101 total now passing
+- [x] **The FaceLandmarker model itself was verified live, not just unit-tested**: downloaded correctly (3.7MB, a real model file), initialized, and in a live browser session with a real face in front of the camera, the status panel correctly read "Face Tracking: Yes" — stronger verification than most of this project's other modes have had, since a human's face genuinely was in frame for this one
+- [ ] **Not yet verified: actually making a finger-heart, and actually holding a confirmed pinch near a mouth for the kiss effect.** The underlying model and lifecycle are confirmed working against real input; the two specific gesture *sequences* are not, so their thresholds (pinch tightness, proximity radius, dwell time) are reasoned defaults, not calibrated ones.
 
-**Priority 8 — Unified interaction modes: partially done.** A `Mode` selector
-(Navigation / Mouse / Keyboard / Launcher / Magic / Expressive / Paused)
-exists and is enforced at the engine level — switching modes resets the
-other modes' in-flight gesture state (a held pinch doesn't carry into
-Navigation mode, a half-stabilized gesture doesn't carry into
+**Priority 8 — Unified interaction modes: done.** A `Mode` selector
+(Navigation / Mouse / Keyboard / Launcher / Magic / Expressive / Face+Hand /
+Paused) exists and is enforced at the engine level — switching modes
+resets every other mode's in-flight gesture state (a held pinch doesn't
+carry into Navigation mode, a half-stabilized gesture doesn't carry into
 Mouse/Keyboard/Launcher mode, typed text and launch-feedback survive a
-switch but a mid-pinch doesn't commit, a cleared burst or confetti effect
-doesn't come back), and only one mode's actions can fire at a time. The
-remaining mode (Face+Hand) doesn't
-exist yet to integrate into this switcher.
+switch but a mid-pinch doesn't commit, a cleared burst/confetti/floating-
+heart effect doesn't come back), only one mode's actions can fire at a
+time, and Face+Hand mode's model genuinely stops running - not just gets
+ignored - the moment you switch away from it. Every mode the roadmap
+describes now exists and is integrated into this switcher.
 
 **Earlier MVP work (still intact, Navigation mode unchanged):**
 - [x] Camera open/read/release with clear error reporting (`core/camera.py`)
@@ -646,21 +742,21 @@ without the video frame itself visibly rendered.
 
 **To run it:** `streamlit run app.py` (see Setup/Running above).
 
-**Demo readiness:** Navigation mode's static gestures are demonstrable
-end-to-end as before, and its dynamic swipe/circle detection has a
-confirmed-working dispatch path (headless-verified) layered on top. Mouse,
-Launcher, Keyboard, Magic, and Expressive mode's code and unit tests are
-solid, and all five render and switch correctly live — Magic mode's idle
-glow and speed-driven intensity were confirmed against a real hand — but
-all six features need a human to actually move/click/launch/type/swipe/
-circle/sign with a real hand before calling them fully demo-ready —
-thresholds and sensitivity defaults are reasoned guesses, not tuned
-against real motion.
+**Demo readiness:** every priority the roadmap describes is implemented,
+tested, and wired into the Mode switcher. Navigation mode's static and
+dynamic gestures are demonstrable end-to-end. Mouse, Launcher, Keyboard,
+Magic, Expressive, and Face+Hand mode's code and unit tests are all
+solid, render and switch correctly live, and in two cases (Magic mode's
+idle glow/intensity, Face+Hand mode's live FaceLandmarker detection) were
+confirmed against real camera input with a real person in frame - but
+every mode still needs a human to actually move/click/launch/type/swipe/
+circle/sign/finger-heart/kiss with a real hand (and in one case, a real
+face) before calling it fully demo-ready. Thresholds and sensitivity
+defaults throughout are reasoned guesses, not tuned against real motion.
 
-**Next highest-priority task:** get a human to try Mouse, Launcher,
-Keyboard, Magic mode, Expressive signs, and the dynamic gestures live and
-tune them, then continue to Priority 7 (face+hand interaction) per the
-roadmap's implementation order.
+**Next highest-priority task:** get a human to try every mode live and
+tune thresholds against real motion - there's no Priority 9 left on the
+roadmap to build next; what's left is verification, not new features.
 
 ## Troubleshooting
 
@@ -706,3 +802,10 @@ roadmap's implementation order.
   (the `run_every=0.15` argument in `app.py`'s `live_fragment`) and see if
   that resolves it — if so, please report it, since that would mean the
   issue is broader than this session's testing environment.
+- **Face+Hand mode is slow to start, or "Face Tracking" never says
+  "Yes"** — the first switch into this mode downloads
+  `face_landmarker.task` (~3.7MB) the same way `recognizer.py` downloads
+  its model on first use; that needs an internet connection once. After
+  that, make sure your face is reasonably well-lit and fully in frame —
+  the finger-heart effect doesn't need a face at all, so if you only care
+  about that one, Face Tracking reading "No" doesn't block it.

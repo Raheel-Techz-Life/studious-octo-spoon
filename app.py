@@ -26,6 +26,7 @@ import streamlit as st
 from core.app_launcher import AppRegistry
 from core.event_logger import EventLogger
 from core.expressive_signs import ExpressiveEngine, ExpressiveSignRegistry
+from core.face_hand_interaction import FaceHandEngine
 from core.gesture_controller import COMMANDS, DEFAULT_MAPPING, GestureController
 from core.interaction_engine import InteractionEngine
 from core.launcher_controller import LauncherConfig, LauncherController
@@ -35,6 +36,7 @@ from core.spatial_keyboard import KeyboardConfig, KeyboardController
 from core.stabilization import GestureStabilizer, StabilizationConfig
 from ui import components
 from ui.expressive_overlay import draw_expressive_overlay
+from ui.face_hand_overlay import draw_face_hand_overlay
 from ui.magic_overlay import draw_magic_overlay
 from ui.styles import CSS
 from utils.audio_feedback import AudioFeedback
@@ -59,6 +61,7 @@ MODE_LABELS = {
     "launcher": "Launcher (open apps)",
     "magic": "Magic (circle for effects)",
     "expressive": "Expressive (celebrate signs)",
+    "face_hand": "Face+Hand (finger heart / kiss)",
     "paused": "Paused",
 }
 
@@ -142,6 +145,7 @@ def init_state() -> None:
         ))
         magic_state = MagicEffectState(MagicConfig())
         expressive_engine = ExpressiveEngine(ExpressiveSignRegistry())
+        face_hand_engine = FaceHandEngine()
         st.session_state.engine = InteractionEngine(
             controller=st.session_state.controller,
             event_logger=st.session_state.event_logger,
@@ -151,6 +155,7 @@ def init_state() -> None:
             launcher_controller=launcher_controller,
             magic_state=magic_state,
             expressive_engine=expressive_engine,
+            face_hand_engine=face_hand_engine,
         )
 
 
@@ -381,6 +386,17 @@ def render_sidebar() -> None:
                 st.rerun()
 
         st.markdown("---")
+        st.markdown("#### Face+Hand mode")
+        st.caption(
+            "Make a finger-heart (thumb+index pinched, other fingers curled) "
+            "for a heart pulse. Hold that same pinch near your mouth briefly "
+            "for floating hearts - proximity to your mouth alone never "
+            "triggers anything by itself, only together with the pinch. "
+            "Face tracking only runs while this mode is active, and stops "
+            "the moment you switch away."
+        )
+
+        st.markdown("---")
         st.session_state.audio_on = st.toggle(
             "Audio feedback", value=st.session_state.audio_on,
             disabled=not st.session_state.audio.available,
@@ -401,6 +417,7 @@ def render_sidebar() -> None:
             engine.dynamic_detector.reset()
             engine.magic_state.reset()
             engine.expressive_engine.reset()
+            engine.face_hand_engine.reset()
 
         st.markdown("---")
         st.markdown("#### Gesture mapping (Navigation mode)")
@@ -440,6 +457,8 @@ def live_fragment() -> None:
                 display_frame = draw_magic_overlay(snap.frame_rgb, snap.magic_status)
             elif snap.mode == "expressive" and snap.expressive_status:
                 display_frame = draw_expressive_overlay(snap.frame_rgb, snap.expressive_status)
+            elif snap.mode == "face_hand" and snap.face_hand_status:
+                display_frame = draw_face_hand_overlay(snap.frame_rgb, snap.face_hand_status)
             display_frame = _downscale_for_display(display_frame)
             frame_placeholder.image(display_frame, channels="RGB", use_container_width=True)
 
@@ -557,6 +576,28 @@ def live_fragment() -> None:
                 f"{s.icon} {s.display_name}" for s in engine.expressive_engine.registry.signs if s.enabled
             )
             st.caption(f"Registered signs: {registry_list or 'none enabled'}")
+
+        elif snap.mode == "face_hand":
+            fh = snap.face_hand_status
+            with status_col1:
+                components.stat("Hand tracking", "Yes" if fh and fh.hand_tracking else "No")
+            with status_col2:
+                components.stat("Face tracking", "Yes" if fh and fh.face_tracking else "No")
+            with status_col3:
+                fh_sign = fh.finger_heart_status if fh else None
+                recent_heart = fh_sign and fh_sign.active_sign_id and fh_sign.effect_progress < 1.0
+                recent_kiss = fh and fh.kiss_effect_progress < 1.0
+                if recent_kiss:
+                    st.markdown(components.pill("Kiss!", "ok"), unsafe_allow_html=True)
+                elif recent_heart:
+                    st.markdown(components.pill("Finger Heart!", "ok"), unsafe_allow_html=True)
+            if fh is not None:
+                if fh.near_mouth and fh.kiss_progress > 0.0:
+                    st.caption("Hold near your mouth...")
+                    components.progress_bar(fh.kiss_progress)
+                elif not fh.face_tracking:
+                    st.caption("Show your face to the camera for the kiss effect "
+                               "(finger-heart works with just your hand).")
 
         elif snap.mode == "paused":
             st.info("Tracking is paused. No commands or pointer actions will fire.")

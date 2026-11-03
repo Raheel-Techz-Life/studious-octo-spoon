@@ -40,6 +40,8 @@ from core.dynamic_gestures import (
 )
 from core.event_logger import EventLogger
 from core.expressive_signs import ExpressiveEngine, ExpressiveStatus
+from core.face_hand_interaction import FaceHandEngine, FaceHandStatus
+from core.face_recognizer import FaceRecognizer
 from core.gesture_controller import GestureController
 from core.launcher_controller import LauncherController, LauncherStatus
 from core.magic_effects import MagicEffectState, MagicStatus
@@ -48,7 +50,7 @@ from core.recognizer import GestureRecognizer
 from core.spatial_keyboard import KeyboardController, KeyboardStatus
 from core.stabilization import GestureStabilizer, StabilizationState
 
-MODES = ("navigation", "mouse", "keyboard", "launcher", "magic", "expressive", "paused")
+MODES = ("navigation", "mouse", "keyboard", "launcher", "magic", "expressive", "face_hand", "paused")
 
 # Dynamic (motion) gestures only act in Navigation mode, where they drive
 # the same in-app demo commands static gestures do. Circular movement has
@@ -77,6 +79,7 @@ class EngineSnapshot:
     launcher_status: LauncherStatus | None = None
     magic_status: MagicStatus | None = None
     expressive_status: ExpressiveStatus | None = None
+    face_hand_status: FaceHandStatus | None = None
     last_dynamic_gesture: DynamicGestureEvent | None = None
     fps: float = 0.0
 
@@ -87,7 +90,8 @@ class InteractionEngine:
                  keyboard_controller: KeyboardController | None = None,
                  launcher_controller: LauncherController | None = None,
                  magic_state: MagicEffectState | None = None,
-                 expressive_engine: ExpressiveEngine | None = None):
+                 expressive_engine: ExpressiveEngine | None = None,
+                 face_hand_engine: FaceHandEngine | None = None):
         self.controller = controller
         self.event_logger = event_logger
         self.nav_stabilizer = nav_stabilizer
@@ -96,11 +100,18 @@ class InteractionEngine:
         self.launcher_controller = launcher_controller or LauncherController()
         self.magic_state = magic_state or MagicEffectState()
         self.expressive_engine = expressive_engine or ExpressiveEngine()
+        self.face_hand_engine = face_hand_engine or FaceHandEngine()
         self.dynamic_detector = DynamicGestureDetector()
         self.dynamic_gestures_enabled = True
 
         self.camera: Camera | None = None
         self.recognizer: GestureRecognizer | None = None
+        # Only ever created/destroyed by _run(), the one thread that uses it -
+        # see the "face_hand" branch below. This genuinely stops face
+        # tracking (not just ignores its output) the moment the mode is left,
+        # per the project brief's privacy requirements.
+        self.face_recognizer: FaceRecognizer | None = None
+        self.face_recognizer_error: str | None = None
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
@@ -142,6 +153,8 @@ class InteractionEngine:
             self.magic_state.reset()
         if mode != "expressive":
             self.expressive_engine.reset()
+        if mode != "face_hand":
+            self.face_hand_engine.reset()
 
     def start(self) -> bool:
         if self.running:
@@ -180,6 +193,9 @@ class InteractionEngine:
         if self.recognizer is not None:
             self.recognizer.close()
             self.recognizer = None
+        if self.face_recognizer is not None:
+            self.face_recognizer.close()
+            self.face_recognizer = None
         with self._snap_lock:
             self._snapshot = EngineSnapshot()
 
@@ -213,6 +229,7 @@ class InteractionEngine:
             launcher_status = None
             magic_status = None
             expressive_status = None
+            face_hand_status = None
 
             if mode == "navigation":
                 gesture = rec.gesture if not rec.error else None
@@ -269,7 +286,31 @@ class InteractionEngine:
                 gesture = rec.gesture if not rec.error else None
                 confidence = rec.confidence if not rec.error else 0.0
                 expressive_status = self.expressive_engine.update(gesture, confidence)
+            elif mode == "face_hand":
+                if self.face_recognizer is None and self.face_recognizer_error is None:
+                    try:
+                        self.face_recognizer = FaceRecognizer()
+                    except Exception as exc:  # noqa: BLE001
+                        self.face_recognizer_error = f"Could not load the face model: {exc}"
+                if self.face_recognizer is not None:
+                    face_rec = self.face_recognizer.recognize(frame_rgb)
+                    hand_landmarks = rec.landmarks if not rec.error and rec.landmarks else None
+                    face_landmarks = (face_rec.landmarks
+                                       if not face_rec.error and face_rec.landmarks else None)
+                    face_hand_status = self.face_hand_engine.update(hand_landmarks, face_landmarks)
+                elif self.face_recognizer_error:
+                    with self._snap_lock:
+                        self._snapshot.error = self.face_recognizer_error
             # "paused": do nothing - frame is still captured/displayed, no actions fire
+
+            # Face tracking only runs while face_hand mode is active - tear it
+            # down the moment the mode is left, in this same thread that owns
+            # it, rather than leaving it loaded "just in case" the mode is
+            # revisited.
+            if mode != "face_hand" and self.face_recognizer is not None:
+                self.face_recognizer.close()
+                self.face_recognizer = None
+                self.face_recognizer_error = None
 
             frame_count += 1
             now = time.monotonic()
@@ -292,6 +333,7 @@ class InteractionEngine:
                     launcher_status=launcher_status,
                     magic_status=magic_status,
                     expressive_status=expressive_status,
+                    face_hand_status=face_hand_status,
                     last_dynamic_gesture=self.dynamic_detector.last_event,
                     fps=fps,
                 )

@@ -49,6 +49,19 @@ def _draw_confetti_piece(frame: np.ndarray, cx: int, cy: int, rotation_deg: floa
     cv2.fillConvexPoly(frame, pts, color, cv2.LINE_AA)
 
 
+def heart_points(cx: int, cy: int, scale: float, steps: int = 40) -> np.ndarray:
+    """A parametric heart-curve outline centered at (cx, cy), `scale` pixels
+    "radius". Shared by Expressive mode's pulsing heart and Face+Hand mode's
+    floating hearts so the curve math lives in exactly one place."""
+    points = []
+    for i in range(steps + 1):
+        t = (i / steps) * 2 * math.pi
+        x = 16 * math.sin(t) ** 3
+        y = -(13 * math.cos(t) - 5 * math.cos(2 * t) - 2 * math.cos(3 * t) - math.cos(4 * t))
+        points.append([int(cx + x * scale / 16), int(cy + y * scale / 16)])
+    return np.array(points, dtype=np.int32)
+
+
 def _draw_pulsing_heart(frame: np.ndarray, w: int, h: int, progress: float) -> None:
     # A quick pulse: grows for the first third, settles back for the rest -
     # simple and readable rather than a physically "accurate" spring.
@@ -57,15 +70,7 @@ def _draw_pulsing_heart(frame: np.ndarray, w: int, h: int, progress: float) -> N
     scale = min(h, w) * 0.12 * max(0.0, pulse)
     cx, cy = w // 2, int(h * 0.4)
 
-    points = []
-    steps = 40
-    for i in range(steps + 1):
-        t = (i / steps) * 2 * math.pi
-        x = 16 * math.sin(t) ** 3
-        y = -(13 * math.cos(t) - 5 * math.cos(2 * t) - 2 * math.cos(3 * t) - math.cos(4 * t))
-        points.append([int(cx + x * scale / 16), int(cy + y * scale / 16)])
-
-    pts = np.array(points, dtype=np.int32)
+    pts = heart_points(cx, cy, scale)
     alpha = max(0.0, 1.0 - progress)
     heart_layer = frame.copy()
     cv2.fillPoly(heart_layer, [pts], HEART_COLOR, cv2.LINE_AA)
