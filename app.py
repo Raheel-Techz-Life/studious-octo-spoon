@@ -24,6 +24,7 @@ import numpy as np
 import streamlit as st
 
 from core.app_launcher import AppRegistry
+from core.demo_state import DemoState
 from core.event_logger import EventLogger
 from core.expressive_signs import ExpressiveEngine, ExpressiveSignRegistry
 from core.face_hand_interaction import FaceHandEngine
@@ -83,6 +84,38 @@ KEYBOARD_LEGEND = [
     ("Pinch over Clear", "Erase all typed text"),
 ]
 
+NAVIGATION_LEGEND = [
+    ("Open Palm", "Pause / resume commands"),
+    ("Thumb Up", "Confirm"),
+    ("Victory sign", "Next"),
+    ("Closed Fist", "Back"),
+    ("I-Love-You sign", "Reset"),
+    ("Swipe left / right / up / down", "Back / Next / Confirm / Reset"),
+    ("Trace a full circle", "Detected (shown, no action yet)"),
+]
+
+LAUNCHER_LEGEND = [
+    ("Move index finger over a tile", "Highlight it"),
+    ("Pinch while over a tile, release", "Launch that app"),
+]
+
+MAGIC_LEGEND = [
+    ("Show your hand", "Idle glow follows it"),
+    ("Move your hand faster", "Glow brightens / grows"),
+    ("Trace a full circle", "Particle burst"),
+]
+
+EXPRESSIVE_LEGEND = [
+    ("Hold Thumbs Up", "Celebration confetti"),
+    ("Hold Victory", "Confetti burst"),
+    ("Hold I-Love-You sign", "Pulsing heart"),
+]
+
+FACE_HAND_LEGEND = [
+    ("Thumb+index pinch, other 3 fingers curled", "Finger-heart pulse"),
+    ("Same pinch, held near your mouth", "Floating hearts"),
+]
+
 st.set_page_config(page_title="GestureBridge", page_icon="🖐️", layout="wide")
 st.markdown(CSS, unsafe_allow_html=True)
 
@@ -90,8 +123,6 @@ st.markdown(CSS, unsafe_allow_html=True)
 def init_state() -> None:
     defaults = {
         "mode": "navigation",
-        "demo_index": 0,
-        "confirmed": False,
         "stability_s": 0.5,
         "cooldown_s": 1.0,
         "min_confidence": 0.6,
@@ -119,6 +150,9 @@ def init_state() -> None:
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+    if "demo_state" not in st.session_state:
+        st.session_state.demo_state = DemoState(card_count=len(DEMO_CARDS))
 
     if "event_logger" not in st.session_state:
         st.session_state.event_logger = EventLogger(max_events=200)
@@ -197,24 +231,12 @@ def _sync_mouse_config() -> None:
 
 def register_demo_handlers() -> None:
     controller: GestureController = st.session_state.controller
+    demo_state: DemoState = st.session_state.demo_state
 
-    def do_next():
-        st.session_state.demo_index = min(len(DEMO_CARDS) - 1, st.session_state.demo_index + 1)
-
-    def do_back():
-        st.session_state.demo_index = max(0, st.session_state.demo_index - 1)
-
-    def do_confirm():
-        st.session_state.confirmed = True
-
-    def do_reset():
-        st.session_state.demo_index = 0
-        st.session_state.confirmed = False
-
-    controller.register_handler("next", do_next)
-    controller.register_handler("back", do_back)
-    controller.register_handler("confirm", do_confirm)
-    controller.register_handler("reset", do_reset)
+    controller.register_handler("next", demo_state.next)
+    controller.register_handler("back", demo_state.back)
+    controller.register_handler("confirm", demo_state.confirm)
+    controller.register_handler("reset", demo_state.reset)
     # "pause" is handled specially (toggles the controller's own enabled
     # flag), both in the engine and in the manual fallback button below, so
     # it works even while execution is disabled.
@@ -406,8 +428,7 @@ def render_sidebar() -> None:
 
         if st.button("Reset session", use_container_width=True):
             st.session_state.event_logger.clear()
-            st.session_state.demo_index = 0
-            st.session_state.confirmed = False
+            st.session_state.demo_state.reset()
             engine.nav_stabilizer.reset()
             if engine.mouse_controller is not None:
                 engine.mouse_controller.reset()
@@ -483,6 +504,7 @@ def live_fragment() -> None:
                     components.pill(f"Dynamic: {dyn.name.replace('_', ' ').title()}", "ok"),
                     unsafe_allow_html=True,
                 )
+            components.action_legend(NAVIGATION_LEGEND, "Navigation mode actions")
 
         elif snap.mode == "mouse":
             ms = snap.mouse_status
@@ -545,6 +567,7 @@ def live_fragment() -> None:
             else:
                 components.launcher_panel(entries, ls.highlighted_app_id if ls else None,
                                            ls.pinching if ls else False)
+            components.action_legend(LAUNCHER_LEGEND, "Launcher mode actions")
 
         elif snap.mode == "magic":
             ms = snap.magic_status
@@ -557,6 +580,7 @@ def live_fragment() -> None:
                     st.markdown(components.pill("Casting!", "ok"), unsafe_allow_html=True)
             if ms and not ms.tracking:
                 st.caption("Show your hand to the camera, then trace a full circle to cast.")
+            components.action_legend(MAGIC_LEGEND, "Magic mode actions")
 
         elif snap.mode == "expressive":
             es = snap.expressive_status
@@ -576,6 +600,7 @@ def live_fragment() -> None:
                 f"{s.icon} {s.display_name}" for s in engine.expressive_engine.registry.signs if s.enabled
             )
             st.caption(f"Registered signs: {registry_list or 'none enabled'}")
+            components.action_legend(EXPRESSIVE_LEGEND, "Expressive mode actions")
 
         elif snap.mode == "face_hand":
             fh = snap.face_hand_status
@@ -598,6 +623,7 @@ def live_fragment() -> None:
                 elif not fh.face_tracking:
                     st.caption("Show your face to the camera for the kiss effect "
                                "(finger-heart works with just your hand).")
+            components.action_legend(FACE_HAND_LEGEND, "Face+Hand mode actions")
 
         elif snap.mode == "paused":
             st.info("Tracking is paused. No commands or pointer actions will fire.")
@@ -641,9 +667,9 @@ def _downscale_for_display(frame_rgb: np.ndarray) -> np.ndarray:
 
 def render_demo_panel() -> None:
     components.card_open("In-app demo (what Navigation-mode commands act on)")
-    idx = st.session_state.demo_index
+    idx = st.session_state.demo_state.index
     st.markdown(f"**{DEMO_CARDS[idx]}**  \n_Card {idx + 1} of {len(DEMO_CARDS)}_")
-    if st.session_state.confirmed:
+    if st.session_state.demo_state.confirmed:
         st.markdown(components.pill("Confirmed", "ok"), unsafe_allow_html=True)
     components.card_close()
 
