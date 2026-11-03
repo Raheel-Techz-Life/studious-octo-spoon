@@ -1,0 +1,121 @@
+"""Spatial keyboard: the index fingertip moves a selection cursor over a
+virtual QWERTY layout, and a deliberate pinch (not a pass-over hover)
+selects the highlighted key. Reuses the same pointer-smoothing approach as
+the spatial mouse, but never touches the OS - it only writes into an
+in-app text buffer (see README: system-wide typing is explicitly out of
+scope for now).
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+
+from core import hand_landmarks as hl
+from core.keyboard_layout import Key, KeyboardLayout
+from core.pointer_filter import ExponentialSmoother
+
+
+@dataclass
+class KeyboardConfig:
+    smoothing_alpha: float = 0.4
+    mirror_x: bool = True
+    pinch_threshold: float = 0.45
+    select_cooldown_s: float = 0.25  # minimum gap between two key selections, even on different keys
+
+
+@dataclass
+class KeyboardStatus:
+    tracking: bool = False
+    pointer_norm: tuple[float, float] | None = None
+    highlighted_key: str | None = None
+    pinching: bool = False
+    last_selected_key: str | None = None
+    last_selected_at: float = 0.0
+    shift_active: bool = False
+    caps_lock: bool = False
+    text: str = ""
+
+
+class KeyboardController:
+    def __init__(self, layout: KeyboardLayout | None = None, config: KeyboardConfig | None = None):
+        self.layout = layout or KeyboardLayout()
+        self.config = config or KeyboardConfig()
+        self._smoother = ExponentialSmoother(self.config.smoothing_alpha)
+        self._pinched = False
+        self._last_select_time = 0.0
+        self.status = KeyboardStatus()
+
+    def set_smoothing(self, alpha: float) -> None:
+        self.config.smoothing_alpha = alpha
+        self._smoother.alpha = alpha
+
+    def reset(self) -> None:
+        text = self.status.text  # typed text survives a mode switch/hand loss
+        shift = self.status.shift_active
+        caps = self.status.caps_lock
+        self._pinched = False
+        self._smoother.reset()
+        self.status = KeyboardStatus(text=text, shift_active=shift, caps_lock=caps)
+
+    def clear_text(self) -> None:
+        self.status.text = ""
+
+    def update(self, landmarks: list[tuple[float, float]] | None) -> KeyboardStatus:
+        if not landmarks:
+            self.reset()
+            return self.status
+
+        self.status.tracking = True
+        scale = hl.hand_scale(landmarks)
+        if scale <= 1e-6:
+            return self.status
+
+        index_x, index_y = landmarks[hl.INDEX_TIP]
+        if self.config.mirror_x:
+            index_x = 1.0 - index_x
+        smooth_x, smooth_y = self._smoother.update(
+            min(1.0, max(0.0, index_x)), min(1.0, max(0.0, index_y))
+        )
+        self.status.pointer_norm = (smooth_x, smooth_y)
+
+        key = self.layout.key_at(smooth_x, smooth_y)
+        self.status.highlighted_key = key.id if key else None
+
+        pinch_dist = hl.distance(landmarks, hl.THUMB_TIP, hl.INDEX_TIP) / scale
+        is_pinched = pinch_dist < self.config.pinch_threshold
+
+        now = time.monotonic()
+        if is_pinched and not self._pinched:
+            self._pinched = True
+        elif not is_pinched and self._pinched:
+            self._pinched = False
+            since_last = now - self._last_select_time
+            if key is not None and since_last >= self.config.select_cooldown_s:
+                self._select(key, now)
+
+        self.status.pinching = self._pinched
+        return self.status
+
+    def _select(self, key: Key, now: float) -> None:
+        if key.char is not None:
+            ch = key.char.upper() if (self.status.shift_active or self.status.caps_lock) else key.char.lower()
+            self.status.text += ch
+            if self.status.shift_active:
+                self.status.shift_active = False  # one-shot, like a real shift tap
+        elif key.id == "SPACE":
+            self.status.text += " "
+        elif key.id == "BACKSPACE":
+            self.status.text = self.status.text[:-1]
+        elif key.id == "ENTER":
+            self.status.text += "\n"
+        elif key.id == "SHIFT":
+            self.status.shift_active = not self.status.shift_active
+        elif key.id == "CAPS":
+            self.status.caps_lock = not self.status.caps_lock
+        elif key.id == "CLEAR":
+            self.status.text = ""
+
+        self.status.last_selected_key = key.id
+        self.status.last_selected_at = now
+        self._last_select_time = now

@@ -27,6 +27,7 @@ from core.event_logger import EventLogger
 from core.gesture_controller import COMMANDS, DEFAULT_MAPPING, GestureController
 from core.interaction_engine import InteractionEngine
 from core.mouse_controller import MouseConfig, MouseController
+from core.spatial_keyboard import KeyboardConfig, KeyboardController
 from core.stabilization import GestureStabilizer, StabilizationConfig
 from ui import components
 from ui.styles import CSS
@@ -45,7 +46,12 @@ DEMO_CARDS = [
     "Card 4 — this is the last card",
 ]
 
-MODE_LABELS = {"navigation": "Navigation (gestures)", "mouse": "Mouse (pointer control)", "paused": "Paused"}
+MODE_LABELS = {
+    "navigation": "Navigation (gestures)",
+    "mouse": "Mouse (pointer control)",
+    "keyboard": "Keyboard (spatial typing)",
+    "paused": "Paused",
+}
 
 st.set_page_config(page_title="GestureBridge", page_icon="🖐️", layout="wide")
 st.markdown(CSS, unsafe_allow_html=True)
@@ -70,6 +76,9 @@ def init_state() -> None:
         "mouse_right_click_enabled": True,
         "mouse_drag_enabled": True,
         "mouse_scroll_enabled": True,
+        # Keyboard mode settings
+        "keyboard_smoothing": 0.4,
+        "keyboard_mirror": True,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -90,11 +99,16 @@ def init_state() -> None:
             min_confidence=st.session_state.min_confidence,
         ))
         mouse_controller = _build_mouse_controller()
+        keyboard_controller = KeyboardController(config=KeyboardConfig(
+            smoothing_alpha=st.session_state.keyboard_smoothing,
+            mirror_x=st.session_state.keyboard_mirror,
+        ))
         st.session_state.engine = InteractionEngine(
             controller=st.session_state.controller,
             event_logger=st.session_state.event_logger,
             nav_stabilizer=nav_stabilizer,
             mouse_controller=mouse_controller,
+            keyboard_controller=keyboard_controller,
         )
 
 
@@ -245,6 +259,18 @@ def render_sidebar() -> None:
             _sync_mouse_config()
 
         st.markdown("---")
+        st.markdown("#### Keyboard mode")
+        kb: KeyboardController = engine.keyboard_controller
+        st.session_state.keyboard_smoothing = st.slider(
+            "Keyboard pointer smoothing", 0.1, 1.0, st.session_state.keyboard_smoothing, 0.05)
+        st.session_state.keyboard_mirror = st.toggle(
+            "Keyboard mirror", value=st.session_state.keyboard_mirror)
+        kb.set_smoothing(st.session_state.keyboard_smoothing)
+        kb.config.mirror_x = st.session_state.keyboard_mirror
+        if st.button("Clear typed text", use_container_width=True):
+            kb.clear_text()
+
+        st.markdown("---")
         st.session_state.audio_on = st.toggle(
             "Audio feedback", value=st.session_state.audio_on,
             disabled=not st.session_state.audio.available,
@@ -259,6 +285,8 @@ def render_sidebar() -> None:
             engine.nav_stabilizer.reset()
             if engine.mouse_controller is not None:
                 engine.mouse_controller.reset()
+            engine.keyboard_controller.reset()
+            engine.keyboard_controller.clear_text()
 
         st.markdown("---")
         st.markdown("#### Gesture mapping (Navigation mode)")
@@ -286,7 +314,11 @@ def live_fragment() -> None:
         if snap.frame_rgb is not None:
             display_frame = snap.frame_rgb
             if snap.mode == "mouse" and snap.mouse_status and snap.mouse_status.pointer_norm:
-                display_frame = _draw_pointer_overlay(snap.frame_rgb, snap.mouse_status)
+                active = snap.mouse_status.state in ("pinched", "dragging")
+                display_frame = _draw_pointer_overlay(snap.frame_rgb, snap.mouse_status.pointer_norm, active)
+            elif snap.mode == "keyboard" and snap.keyboard_status and snap.keyboard_status.pointer_norm:
+                display_frame = _draw_pointer_overlay(
+                    snap.frame_rgb, snap.keyboard_status.pointer_norm, snap.keyboard_status.pinching)
             frame_placeholder.image(display_frame, channels="RGB", use_container_width=True)
 
         if snap.mode == "navigation":
@@ -318,6 +350,28 @@ def live_fragment() -> None:
                                 unsafe_allow_html=True)
             st.caption(f"Engine FPS: {snap.fps:.0f}")
 
+        elif snap.mode == "keyboard":
+            ks = snap.keyboard_status
+            with status_col1:
+                components.stat("Hand tracking", "Yes" if ks and ks.tracking else "No")
+            with status_col2:
+                mods = []
+                if ks and ks.shift_active:
+                    mods.append("Shift")
+                if ks and ks.caps_lock:
+                    mods.append("Caps")
+                components.stat("Modifiers", ", ".join(mods) if mods else "None")
+            with status_col3:
+                recent = ks and ks.last_selected_key and (time.monotonic() - ks.last_selected_at) < 0.6
+                if recent:
+                    st.markdown(components.pill(ks.last_selected_key.replace("CHAR_", ""), "ok"),
+                                unsafe_allow_html=True)
+            if ks is not None:
+                components.keyboard_panel(
+                    engine.keyboard_controller.layout, ks.highlighted_key, ks.pinching,
+                    ks.text, ks.shift_active, ks.caps_lock,
+                )
+
         elif snap.mode == "paused":
             st.info("Tracking is paused. No commands or pointer actions will fire.")
 
@@ -325,15 +379,15 @@ def live_fragment() -> None:
     render_history_and_analytics()
 
 
-def _draw_pointer_overlay(frame_rgb: np.ndarray, mouse_status) -> np.ndarray:
+def _draw_pointer_overlay(frame_rgb: np.ndarray, pointer_norm: tuple[float, float], active: bool) -> np.ndarray:
     import cv2
     h, w = frame_rgb.shape[:2]
-    nx, ny = mouse_status.pointer_norm
+    nx, ny = pointer_norm
     # Overlay is drawn in camera-frame space using the same mirroring the
     # controller applied, so the dot tracks the fingertip the user sees.
     px, py = int(nx * w), int(ny * h)
     out = frame_rgb.copy()
-    color = (255, 80, 80) if mouse_status.state in ("pinched", "dragging") else (80, 230, 160)
+    color = (255, 80, 80) if active else (80, 230, 160)
     cv2.circle(out, (px, py), 12, color, 3)
     cv2.circle(out, (px, py), 2, color, -1)
     return out

@@ -110,5 +110,68 @@ CSS = """
     font-size: 0.95rem;
 }
 .gb-mapping-row:last-child { border-bottom: none; }
+
+.gb-kb-textfield {
+    min-height: 2.6rem;
+    background: var(--gb-surface-alt);
+    border: 1px solid var(--gb-border);
+    border-radius: 10px;
+    padding: 0.6rem 0.8rem;
+    margin-bottom: 0.6rem;
+    font-size: 1.1rem;
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    color: var(--gb-text);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.gb-kb-placeholder {
+    color: var(--gb-text-dim);
+    font-style: italic;
+}
+
+.gb-keyboard {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 2.4 / 1;
+    background: var(--gb-surface);
+    border: 1px solid var(--gb-border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.gb-key {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    border: 1px solid var(--gb-border);
+    background: var(--gb-surface-alt);
+    color: var(--gb-text-dim);
+    font-size: 0.85rem;
+    font-weight: 600;
+    transition: background 0.08s ease, color 0.08s ease, transform 0.08s ease;
+    user-select: none;
+}
+
+.gb-key-hover {
+    background: rgba(94, 230, 164, 0.18);
+    color: var(--gb-text);
+    border-color: var(--gb-accent-dim);
+    transform: scale(1.04);
+}
+
+.gb-key-pinch {
+    background: var(--gb-accent);
+    color: #0f1115;
+    border-color: var(--gb-accent);
+    transform: scale(1.08);
+}
+
+.gb-key-modifier-on {
+    outline: 2px solid var(--gb-warn);
+    outline-offset: -2px;
+}
 </style>
 """

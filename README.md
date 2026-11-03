@@ -9,10 +9,11 @@ either in-app navigation commands or real OS pointer control, with a
 stabilization layer that prevents a single held gesture from firing
 repeatedly.
 
-**Status:** the Navigation-mode MVP (gesture → in-app command) and the
-Mouse mode spatial pointer (Priority 1 of the advanced-features roadmap) are
-implemented and tested. Keyboard, app launcher, dynamic gestures, Magic
-Mode, expressive signs, and face+hand interaction are **not yet built** —
+**Status:** the Navigation-mode MVP (gesture → in-app command), the Mouse
+mode spatial pointer (Priority 1), and the Keyboard mode spatial typing
+(Priority 3) from the advanced-features roadmap are implemented and tested.
+App launcher, dynamic gestures, Magic Mode, expressive signs, and face+hand
+interaction are **not yet built** —
 see the Progress checklist below for exactly what's done.
 
 ## Why
@@ -88,11 +89,13 @@ gesturebridge/
 │   ├── gesture_controller.py     # gesture -> in-app command mapping + dispatch
 │   ├── stabilization.py          # hold-to-confirm + cooldown logic (Navigation mode)
 │   ├── mouse_controller.py       # pointer/click/double-click/right-click/drag/scroll state machine
+│   ├── keyboard_layout.py        # compact QWERTY layout as normalized key rects
+│   ├── spatial_keyboard.py       # pointer->highlight->pinch-to-type state machine
 │   ├── pointer_filter.py         # exponential smoothing for the cursor
 │   ├── interaction_engine.py     # background tracking thread, owns camera+recognizer
 │   └── event_logger.py           # bounded, thread-safe in-memory event history
 ├── ui/
-│   ├── components.py              # Streamlit UI fragments
+│   ├── components.py              # Streamlit UI fragments (incl. the virtual keyboard panel)
 │   └── styles.py                   # dark, high-contrast theme CSS
 ├── utils/
 │   ├── metrics.py                  # pandas aggregation for analytics
@@ -100,7 +103,8 @@ gesturebridge/
 └── tests/
     ├── test_stabilization.py
     ├── test_gesture_controller.py
-    └── test_mouse_controller.py
+    ├── test_mouse_controller.py
+    └── test_spatial_keyboard.py
 ```
 
 **Data flow (Navigation mode):** `camera.py` grabs a frame → `recognizer.py`
@@ -116,6 +120,14 @@ discrete gesture classifier/stabilizer — it reads fingertip positions and
 pinch distances directly every frame (via `hand_landmarks.py`'s geometry
 helpers), smooths the index fingertip with `pointer_filter.py`, and turns
 pinch/pose state transitions into real `pyautogui` pointer calls.
+
+**Data flow (Keyboard mode):** same camera + recognizer again, but the raw
+landmarks go to `spatial_keyboard.py` instead — it reuses the same
+`pointer_filter.py` smoothing and pinch-distance approach as Mouse mode,
+looks up which `keyboard_layout.py` key the smoothed pointer is over, and on
+pinch-release commits that key to an in-app text buffer rather than calling
+any OS API. The UI renders the layout as a styled grid via
+`ui/components.py::keyboard_panel`.
 
 ### Why there's now a background tracking thread
 
@@ -213,6 +225,37 @@ input" requirement). Actually moving the OS cursor and clicking with a real
 hand in front of the camera has **not** been exercised by a human yet; do
 that before relying on it.
 
+## Keyboard mode
+
+The index fingertip moves a selection cursor over a virtual QWERTY layout
+rendered in the UI (letters, digits, Space, Backspace, Enter, Shift, Caps
+Lock, Clear — no symbol/punctuation layer yet). A pinch-and-release over the
+highlighted key types it; just hovering never types anything.
+
+| Gesture | Action |
+|---|---|
+| Move index finger over a key | Highlight it |
+| Pinch thumb + index while over a key, release | Type that key |
+| Pinch over Shift | One-shot: capitalizes the next letter only |
+| Pinch over Caps | Sticky: stays on until pinched again |
+| Pinch over Backspace / Space / Enter / Clear | Edit the in-app text field accordingly |
+
+Typing is entirely in-app — it writes to a text field inside GestureBridge,
+not into other applications. System-wide keyboard injection is explicitly
+out of scope for now (per the roadmap: build in-app typing first). Losing
+the hand mid-pinch does not type anything, and typed text survives a mode
+switch or a momentarily lost hand (only truly cleared by the Clear key or
+the sidebar's "Clear typed text" button).
+
+**What has and hasn't been verified:** the full pointer→highlight→pinch→
+type state machine (including the Shift one-shot/Caps sticky distinction,
+backspace/space/enter/clear, and that a held pinch doesn't repeat-type) is
+covered by 9 passing unit tests with synthetic hand landmarks — no camera
+needed. Live-camera verification in this session confirmed the mode
+switches in cleanly and the keyboard grid renders and highlights correctly;
+actually typing a sentence with a real hand has **not** been exercised by a
+human yet.
+
 ## Known limitations
 
 - Single-hand only in the MVP (multi-hand input is not evaluated).
@@ -269,22 +312,34 @@ human-verified live.**
 - [ ] **Not yet verified: an actual human moving the cursor and clicking with a real hand.** I have no hands to test this with myself — try it and tune sensitivity/smoothing to taste.
 - [x] Checkpoint committed locally; a camera-contention issue hit mid-session (another app had the webcam, causing 1fps reads and corrupted frames) — confirmed external, not a GestureBridge bug, and had cleared by the end of the session
 
-**Priorities 2-7 — Application launcher, spatial keyboard, dynamic gestures,
-Magic Mode, expressive hand signs, face+hand interaction: not started.**
-This is a genuinely large scope (the roadmap itself lays out 10 implementation
-phases); Priority 1 alone — done properly with real tests, not just code that
-compiles — was the right-sized unit of work to land solidly in one pass
-rather than sketching all seven remaining priorities shallowly. See the
-roadmap's own "Implementation order" for the suggested next phase (D: spatial
-keyboard, then E: app launcher).
+**Priority 3 — Spatial keyboard: implemented and unit-tested, not yet
+human-verified live.**
+- [x] Compact QWERTY layout (letters, digits, Space, Backspace, Enter, Shift, Caps, Clear) as normalized key rects (`core/keyboard_layout.py`)
+- [x] Pointer → highlight → pinch-to-select state machine, reusing the same smoothing approach as Mouse mode but writing to an in-app text buffer instead of the OS (`core/spatial_keyboard.py`)
+- [x] Shift (one-shot) vs. Caps (sticky) handled distinctly; Backspace/Space/Enter/Clear all wired up
+- [x] Debounced: holding a pinch doesn't repeat-type; a select cooldown prevents accidental double-types
+- [x] 9 unit tests with synthetic hand landmarks, no camera needed
+- [x] Rendered as a styled virtual keyboard in the UI (`ui/components.py::keyboard_panel`, new CSS in `ui/styles.py`), with the same pointer-dot overlay on the camera feed Mouse mode uses
+- [x] Live-verified: mode switches in cleanly, the keyboard grid renders and highlights correctly
+- [ ] **Not yet verified: an actual human typing a real sentence with their hand.**
+- [x] Explicitly out of scope per the roadmap: system-wide keyboard injection into other applications (in-app typing only, by design)
+
+**Priorities 2, 4-7 — Application launcher, dynamic gestures, Magic Mode,
+expressive hand signs, face+hand interaction: not started.** This is a
+genuinely large scope (the roadmap itself lays out 10 implementation
+phases); Priorities 1 and 3, done properly with real tests rather than code
+that merely compiles, were the right-sized units of work to land solidly in
+one pass each. See the roadmap's own "Implementation order" for the next
+suggested phase (E: app launcher).
 
 **Priority 8 — Unified interaction modes: partially done.** A `Mode` selector
-(Navigation / Mouse / Paused) exists and is enforced at the engine level —
-switching modes resets the other mode's in-flight gesture state (a held
-pinch doesn't carry into Navigation mode, a half-stabilized gesture doesn't
-carry into Mouse mode), and only one mode's actions can fire at a time. The
-remaining modes (Keyboard, Launcher, Expressive, Magic, Face+Hand) don't
-exist yet to integrate into this switcher.
+(Navigation / Mouse / Keyboard / Paused) exists and is enforced at the engine
+level — switching modes resets the other modes' in-flight gesture state (a
+held pinch doesn't carry into Navigation mode, a half-stabilized gesture
+doesn't carry into Mouse or Keyboard mode, typed text survives a switch but
+a mid-pinch doesn't commit), and only one mode's actions can fire at a time.
+The remaining modes (Launcher, Expressive, Magic, Face+Hand) don't exist yet
+to integrate into this switcher.
 
 **Earlier MVP work (still intact, Navigation mode unchanged):**
 - [x] Camera open/read/release with clear error reporting (`core/camera.py`)
@@ -299,12 +354,13 @@ exist yet to integrate into this switcher.
 **To run it:** `streamlit run app.py` (see Setup/Running above).
 
 **Demo readiness:** Navigation mode is demonstrable end-to-end as before.
-Mouse mode's code and unit tests are solid, but needs a human to actually
-try moving the cursor and clicking before calling it demo-ready — sensitivity
-and smoothing defaults are reasonable guesses, not tuned against a real hand.
+Mouse and Keyboard mode's code and unit tests are solid, and both render and
+switch correctly live, but need a human to actually move the cursor/click
+and type a sentence before calling them demo-ready — sensitivity and
+smoothing defaults are reasonable guesses, not tuned against a real hand.
 
-**Next highest-priority task:** get a human to try Mouse mode live and tune
-it, then continue to Priority 2/3 (app launcher, spatial keyboard) per the
+**Next highest-priority task:** get a human to try Mouse and Keyboard mode
+live and tune them, then continue to Priority 2 (app launcher) per the
 roadmap's implementation order.
 
 ## Troubleshooting

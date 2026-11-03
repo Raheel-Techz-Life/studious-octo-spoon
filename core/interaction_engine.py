@@ -32,9 +32,10 @@ from core.event_logger import EventLogger
 from core.gesture_controller import GestureController
 from core.mouse_controller import MouseController, MouseStatus
 from core.recognizer import GestureRecognizer
+from core.spatial_keyboard import KeyboardController, KeyboardStatus
 from core.stabilization import GestureStabilizer, StabilizationState
 
-MODES = ("navigation", "mouse", "paused")
+MODES = ("navigation", "mouse", "keyboard", "paused")
 
 
 @dataclass
@@ -47,16 +48,19 @@ class EngineSnapshot:
     error: str | None = None
     nav_stab_state: StabilizationState | None = None
     mouse_status: MouseStatus | None = None
+    keyboard_status: KeyboardStatus | None = None
     fps: float = 0.0
 
 
 class InteractionEngine:
     def __init__(self, controller: GestureController, event_logger: EventLogger,
-                 nav_stabilizer: GestureStabilizer, mouse_controller: MouseController):
+                 nav_stabilizer: GestureStabilizer, mouse_controller: MouseController,
+                 keyboard_controller: KeyboardController | None = None):
         self.controller = controller
         self.event_logger = event_logger
         self.nav_stabilizer = nav_stabilizer
         self.mouse_controller = mouse_controller
+        self.keyboard_controller = keyboard_controller or KeyboardController()
 
         self.camera: Camera | None = None
         self.recognizer: GestureRecognizer | None = None
@@ -91,6 +95,8 @@ class InteractionEngine:
             self.mouse_controller.reset()
         if mode != "navigation":
             self.nav_stabilizer.reset()
+        if mode != "keyboard":
+            self.keyboard_controller.reset()
 
     def start(self) -> bool:
         if self.running:
@@ -158,6 +164,7 @@ class InteractionEngine:
             mode = self.mode
             nav_stab_state = None
             mouse_status = None
+            keyboard_status = None
 
             if mode == "navigation":
                 gesture = rec.gesture if not rec.error else None
@@ -187,6 +194,9 @@ class InteractionEngine:
                     self.mouse_controller.reset()
                     with self._snap_lock:
                         self._snapshot.error = f"Mouse control error: {exc}"
+            elif mode == "keyboard":
+                landmarks = rec.landmarks if not rec.error and rec.landmarks else None
+                keyboard_status = self.keyboard_controller.update(landmarks)
             # "paused": do nothing - frame is still captured/displayed, no actions fire
 
             frame_count += 1
@@ -206,5 +216,6 @@ class InteractionEngine:
                     error=rec.error,
                     nav_stab_state=nav_stab_state,
                     mouse_status=mouse_status,
+                    keyboard_status=keyboard_status,
                     fps=fps,
                 )

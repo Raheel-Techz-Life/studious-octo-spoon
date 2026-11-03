@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import html
+
 import streamlit as st
+
+from core.keyboard_layout import KeyboardLayout
 
 
 def pill(text: str, kind: str = "neutral") -> str:
@@ -55,5 +59,37 @@ def mapping_row(gesture: str, command: str) -> None:
     st.markdown(
         f'<div class="gb-mapping-row"><span>{gesture.replace("_", " ")}</span>'
         f'<span>&rarr; {command}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def keyboard_panel(layout: KeyboardLayout, highlighted_key_id: str | None,
+                    pinching: bool, text: str, shift_active: bool, caps_lock: bool) -> None:
+    """Renders the virtual QWERTY layout as absolutely-positioned divs
+    matching each key's normalized rect, highlighting whichever key the
+    pointer is currently over."""
+    key_divs = []
+    for key in layout.keys:
+        is_active = key.id == highlighted_key_id
+        css_class = "gb-key"
+        if is_active:
+            css_class += " gb-key-pinch" if pinching else " gb-key-hover"
+        if key.id == "SHIFT" and shift_active:
+            css_class += " gb-key-modifier-on"
+        if key.id == "CAPS" and caps_lock:
+            css_class += " gb-key-modifier-on"
+        label = html.escape(key.label)
+        style = (
+            f"left:{key.x0 * 100:.2f}%; top:{key.y0 * 100:.2f}%; "
+            f"width:{(key.x1 - key.x0) * 100:.2f}%; height:{(key.y1 - key.y0) * 100:.2f}%;"
+        )
+        key_divs.append(f'<div class="{css_class}" style="{style}">{label}</div>')
+
+    display_text = html.escape(text).replace("\n", "<br>") or '<span class="gb-kb-placeholder">Type by pinching over a key…</span>'
+    st.markdown(
+        f"""
+        <div class="gb-kb-textfield">{display_text}</div>
+        <div class="gb-keyboard">{''.join(key_divs)}</div>
+        """,
         unsafe_allow_html=True,
     )
