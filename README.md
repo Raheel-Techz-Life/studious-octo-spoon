@@ -10,10 +10,11 @@ stabilization layer that prevents a single held gesture from firing
 repeatedly.
 
 **Status:** the Navigation-mode MVP (gesture → in-app command), the Mouse
-mode spatial pointer (Priority 1), the app Launcher (Priority 2), and the
-Keyboard mode spatial typing (Priority 3) from the advanced-features
-roadmap are implemented and tested. Dynamic gestures, Magic Mode,
-expressive signs, and face+hand interaction are **not yet built** —
+mode spatial pointer (Priority 1), the app Launcher (Priority 2), the
+Keyboard mode spatial typing (Priority 3), and swipe/circle dynamic
+gestures (Priority 4) from the advanced-features roadmap are implemented
+and tested. Magic Mode, expressive signs, and face+hand interaction are
+**not yet built** —
 see the Progress checklist below for exactly what's done.
 
 ## Why
@@ -88,6 +89,7 @@ gesturebridge/
 │   ├── hand_landmarks.py         # named landmark indices + geometry helpers
 │   ├── gesture_controller.py     # gesture -> in-app command mapping + dispatch
 │   ├── stabilization.py          # hold-to-confirm + cooldown logic (Navigation mode)
+│   ├── dynamic_gestures.py       # trajectory-based swipe/circle detection (Navigation mode)
 │   ├── mouse_controller.py       # pointer/click/double-click/right-click/drag/scroll state machine
 │   ├── app_launcher.py           # app registry + safe, explicit-target launch function
 │   ├── launcher_controller.py    # pointer->highlight->pinch-to-launch state machine
@@ -105,6 +107,7 @@ gesturebridge/
 └── tests/
     ├── test_stabilization.py
     ├── test_gesture_controller.py
+    ├── test_dynamic_gestures.py
     ├── test_mouse_controller.py
     ├── test_app_launcher.py
     ├── test_launcher_controller.py
@@ -117,6 +120,11 @@ label + real confidence score, never fabricated) → `stabilization.py` tracks
 whether that gesture has held steady long enough, and enforces a cooldown →
 only then does `gesture_controller.py` dispatch the mapped in-app command →
 `event_logger.py` records what happened for the history/analytics panels.
+In parallel, the same frame's wrist position also feeds
+`dynamic_gestures.py`'s trajectory buffer; a detected swipe or circle
+dispatches through `gesture_controller.py::invoke_command` (bypassing the
+static gesture→command mapping, since a motion isn't one of the
+recognizer's discrete pose labels).
 
 **Data flow (Mouse mode):** same camera + recognizer, but `recognizer.py`'s
 raw 21-point hand landmarks go to `mouse_controller.py` instead of the
@@ -196,6 +204,55 @@ prediction feeds `GestureStabilizer`, which:
 
 This is tested directly in `tests/test_stabilization.py` without needing a
 camera.
+
+## Dynamic gestures (Navigation mode)
+
+Beyond the static poses above, Navigation mode also recognizes motion:
+swipe left/right/up/down and a full circular hand movement, detected from a
+rolling trajectory buffer of the wrist position rather than any single
+frame's hand pose - this is what makes them "dynamic" rather than static.
+
+| Motion | Action |
+|---|---|
+| Swipe left | Back |
+| Swipe right | Next |
+| Swipe up | Confirm |
+| Swipe down | Reset |
+| Full circle (either direction) | Detected and shown (no demo action yet - see Known limitations) |
+
+Both detectors run off the same trajectory buffer in `core/dynamic_gestures.py`:
+
+- **Swipe** requires large net displacement, a straight-enough path
+  (net displacement / total path length), *and* a low cumulative turning
+  angle, completed inside a time budget. The straightness check alone
+  isn't sufficient to reject curved motion - a short arc of a circle also
+  scores "straight" by that ratio alone, which is exactly the false
+  positive a first version of this code had during development (see git
+  history); the cumulative-turn check is what actually tells a slightly
+  curved swipe apart from a piece of a circle.
+- **Circle** fits a center point to the recent trajectory and sums the
+  *signed* angular change frame-to-frame to measure how much of a full
+  rotation was actually traced (the "trajectory/geometric method" rather
+  than checking whether the hand happened to visit a scattered set of
+  positions).
+
+Both share one cooldown and clear their shared buffer the moment a gesture
+fires, so the tail end of a completed swipe or circle can't immediately
+re-trigger another detection, and an interrupted motion (hand disappears
+mid-swipe) is discarded rather than evaluated as if it had completed.
+Toggle this off in the sidebar without affecting static-gesture Navigation
+commands.
+
+**What has and hasn't been verified:** the full detection logic (correct
+direction/rotation-sense classification, rejection of short/slow/wobbly
+motion, the cooldown, and hand-loss-mid-gesture handling) is covered by 12
+unit tests using a fake clock and synthetic trajectories, no camera needed.
+A separate headless integration test fed a synthetic swipe through the
+exact dispatch path the engine uses and confirmed it correctly drove the
+demo card state and event log. Actually swiping or circling in front of a
+real camera has **not** been exercised by a human yet - the thresholds
+(minimum distance, straightness, turning angle, circle coverage) are
+reasoned defaults, not tuned against real hand motion.
 
 ## Mouse mode
 
@@ -313,9 +370,17 @@ human yet.
   no custom-trained gestures.
 - Lighting and distance from the camera affect recognition reliability;
   see the test plan below for what was actually measured.
-- Desktop-level automation (real OS keypresses, media controls) is **not**
-  implemented — commands only act on the in-app demo state, by design (see
-  the project's safety constraints on gesture-triggered system actions).
+- Navigation mode's commands only act on the in-app demo state, by design.
+  Real OS automation exists, but only in the dedicated modes built for it:
+  Mouse mode (real pointer/click/drag/scroll) and Launcher mode (real
+  process launch) — both with explicit safety constraints documented in
+  their own sections above. Keyboard mode is in-app only, by design (no
+  system-wide keyboard injection). There is no general mechanism for an
+  arbitrary gesture to run an arbitrary OS command.
+- Circular movement is detected and displayed in Navigation mode but has no
+  action mapped to it yet - no demo command fits naturally, and it's the
+  natural trigger for Magic Mode (a later, unbuilt priority), so it's left
+  unmapped rather than forced into an arbitrary one.
 - This is not a substitute for dedicated assistive technology; it has not
   been evaluated with real target users.
 
@@ -387,13 +452,26 @@ human-verified live with a real pinch-launch.**
 - [ ] **macOS entirely untested** — implemented per the roadmap's platform-adapter guidance, but this session only had a Windows machine to verify against
 - [x] Window-switching between already-open apps (section 4.4) intentionally skipped — the roadmap marks it a secondary, OS-permission-heavy enhancement
 
-**Priorities 4-7 — Dynamic gestures, Magic Mode, expressive hand signs,
-face+hand interaction: not started.** This is a genuinely large scope (the
-roadmap itself lays out 10 implementation phases); Priorities 1-3, done
-properly with real tests rather than code that merely compiles, were the
+**Priority 4 — Dynamic gestures: implemented and unit-tested, not yet
+human-verified live.**
+- [x] Trajectory-based swipe detection (left/right/up/down), rejecting short movement, slow drift, wobbly paths, *and* arcs of a circle that would otherwise score "straight" by displacement/path-length ratio alone (`core/dynamic_gestures.py`)
+- [x] Geometric circular-movement detection (fits a center, sums signed angular change to measure actual rotation coverage - not just "visited a scattered set of positions")
+- [x] Shared cooldown + buffer-clear-on-fire so a completed gesture's tail can't immediately re-trigger another
+- [x] An interrupted motion (hand disappears mid-swipe/circle) is discarded, not evaluated as completed
+- [x] Wired into Navigation mode: swipes drive Back/Next/Confirm/Reset via `GestureController.invoke_command` (a new dispatch path for commands that don't come from the static gesture→command mapping); circle is detected and shown but has no demo action yet (natural fit for Magic Mode, a later priority, which will reuse this same detector)
+- [x] Sidebar toggle to disable dynamic gestures independent of static Navigation commands
+- [x] 12 unit tests with a fake clock and synthetic trajectories (fast, deterministic — no real `time.sleep()`), plus a separate headless integration test confirming a synthetic swipe correctly drives demo-card state through the exact dispatch path the engine uses
+- [x] A real latent bug found and fixed during testing: the cooldown gate compared against a `0.0` sentinel for "no gesture yet," which could wrongly suppress a detector's very first gesture if `now` happened to be small — invisible with the real `time.monotonic()` clock (always large) but reproducible with a fake clock, so worth fixing properly rather than dismissing as a test artifact
+- [ ] **Not yet verified: an actual human swiping or circling in front of a real camera.** Thresholds are reasoned defaults, not tuned against real hand motion.
+
+**Priorities 5-7 — Magic Mode, expressive hand signs, face+hand
+interaction: not started.** This is a genuinely large scope (the roadmap
+itself lays out 10 implementation phases); Priorities 1-4, done properly
+with real tests rather than code that merely compiles, were the
 right-sized units of work to land solidly in one pass each. See the
-roadmap's own "Implementation order" for the next suggested phase (F:
-dynamic gestures).
+roadmap's own "Implementation order" for the next suggested phase (G:
+Magic Mode) — which can reuse `dynamic_gestures.py`'s circle detector
+directly for its signature circular-gesture trigger.
 
 **Priority 8 — Unified interaction modes: partially done.** A `Mode` selector
 (Navigation / Mouse / Keyboard / Launcher / Paused) exists and is enforced
@@ -417,16 +495,18 @@ switcher.
 
 **To run it:** `streamlit run app.py` (see Setup/Running above).
 
-**Demo readiness:** Navigation mode is demonstrable end-to-end as before.
-Mouse, Launcher, and Keyboard mode's code and unit tests are solid, and all
-three render and switch correctly live, but need a human to actually move
-the cursor/click, pinch-launch an app, and type a sentence before calling
-them demo-ready — sensitivity and smoothing defaults are reasonable
-guesses, not tuned against a real hand.
+**Demo readiness:** Navigation mode's static gestures are demonstrable
+end-to-end as before, and its dynamic swipe/circle detection has a
+confirmed-working dispatch path (headless-verified) layered on top. Mouse,
+Launcher, and Keyboard mode's code and unit tests are solid, and all three
+render and switch correctly live, but all four features (dynamic gestures
+included) need a human to actually move/click/launch/type/swipe/circle with
+a real hand before calling them demo-ready — thresholds and sensitivity
+defaults are reasoned guesses, not tuned against real motion.
 
-**Next highest-priority task:** get a human to try Mouse, Launcher, and
-Keyboard mode live and tune them, then continue to Priority 4 (dynamic
-gestures) per the roadmap's implementation order.
+**Next highest-priority task:** get a human to try Mouse, Launcher,
+Keyboard, and the new dynamic gestures live and tune them, then continue to
+Priority 5 (Magic Mode) per the roadmap's implementation order.
 
 ## Troubleshooting
 

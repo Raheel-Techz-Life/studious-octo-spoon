@@ -51,14 +51,22 @@ class GestureController:
         command = self.mapping.get(gesture)
         if command is None:
             return CommandResult(gesture=gesture, command=None, status="unmapped")
+        return self.invoke_command(gesture, command, latency_ms=latency_ms)
 
+    def invoke_command(self, gesture_label: str, command: str,
+                        latency_ms: float | None = None) -> CommandResult:
+        """Dispatches a command directly, bypassing the static gesture->command
+        mapping - used by dynamic (motion-based) gestures, which never go
+        through `mapping` since they aren't one of the recognizer's discrete
+        pose labels. `gesture_label` is only for the event log (e.g.
+        "swipe_left"), not looked up anywhere."""
         if not self.enabled:
-            self._event_logger.record(gesture, command, status="blocked", latency_ms=latency_ms)
-            return CommandResult(gesture=gesture, command=command, status="blocked")
+            self._event_logger.record(gesture_label, command, status="blocked", latency_ms=latency_ms)
+            return CommandResult(gesture=gesture_label, command=command, status="blocked")
 
         handler = self._handlers.get(command)
         if handler is not None:
             handler()
 
-        self._event_logger.record(gesture, command, status="executed", latency_ms=latency_ms)
-        return CommandResult(gesture=gesture, command=command, status="executed")
+        self._event_logger.record(gesture_label, command, status="executed", latency_ms=latency_ms)
+        return CommandResult(gesture=gesture_label, command=command, status="executed")

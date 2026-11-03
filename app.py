@@ -71,6 +71,7 @@ def init_state() -> None:
         "audio_on": False,
         "start_error": None,
         "mapping": dict(DEFAULT_MAPPING),
+        "dynamic_gestures_enabled": True,
         # Mouse mode settings
         "mouse_sensitivity": 1.0,   # bigger = smaller active region = less hand travel needed
         "mouse_smoothing": 0.4,
@@ -242,6 +243,12 @@ def render_sidebar() -> None:
             help="Pause this to stop gestures from triggering navigation commands, "
                  "without stopping the camera.",
         )
+        st.session_state.dynamic_gestures_enabled = st.toggle(
+            "Dynamic gestures (swipe / circle)", value=st.session_state.dynamic_gestures_enabled,
+            help="Swipe left/right/up/down drives Back/Next/Confirm/Reset; a full "
+                 "circular motion is detected and shown but not yet mapped to an action.",
+        )
+        engine.dynamic_gestures_enabled = st.session_state.dynamic_gestures_enabled
 
         st.markdown("---")
         st.markdown("#### Mouse mode")
@@ -333,6 +340,7 @@ def render_sidebar() -> None:
             engine.keyboard_controller.reset()
             engine.keyboard_controller.clear_text()
             engine.launcher_controller.reset()
+            engine.dynamic_detector.reset()
 
         st.markdown("---")
         st.markdown("#### Gesture mapping (Navigation mode)")
@@ -385,6 +393,12 @@ def live_fragment() -> None:
                 components.progress_bar(snap.nav_stab_state.progress)
                 if snap.nav_stab_state.in_cooldown:
                     st.caption(f"Cooldown: {snap.nav_stab_state.cooldown_remaining_s:.1f}s remaining")
+            dyn = snap.last_dynamic_gesture
+            if dyn is not None and (time.monotonic() - dyn.at) < 1.2:
+                st.markdown(
+                    components.pill(f"Dynamic: {dyn.name.replace('_', ' ').title()}", "ok"),
+                    unsafe_allow_html=True,
+                )
 
         elif snap.mode == "mouse":
             ms = snap.mouse_status

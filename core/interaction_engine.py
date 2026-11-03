@@ -28,6 +28,16 @@ import cv2
 import numpy as np
 
 from core.camera import Camera
+from core.dynamic_gestures import (
+    CIRCLE_CLOCKWISE,
+    CIRCLE_COUNTERCLOCKWISE,
+    SWIPE_DOWN,
+    SWIPE_LEFT,
+    SWIPE_RIGHT,
+    SWIPE_UP,
+    DynamicGestureDetector,
+    DynamicGestureEvent,
+)
 from core.event_logger import EventLogger
 from core.gesture_controller import GestureController
 from core.launcher_controller import LauncherController, LauncherStatus
@@ -37,6 +47,18 @@ from core.spatial_keyboard import KeyboardController, KeyboardStatus
 from core.stabilization import GestureStabilizer, StabilizationState
 
 MODES = ("navigation", "mouse", "keyboard", "launcher", "paused")
+
+# Dynamic (motion) gestures only act in Navigation mode, where they drive
+# the same in-app demo commands static gestures do. Circular movement has
+# no demo command mapped to it yet - it's only acknowledged/displayed for
+# now (Magic Mode, a later roadmap priority, is the natural home for a real
+# circle-triggered effect, and will reuse this same detector).
+DYNAMIC_GESTURE_COMMANDS = {
+    SWIPE_LEFT: "back",
+    SWIPE_RIGHT: "next",
+    SWIPE_UP: "confirm",
+    SWIPE_DOWN: "reset",
+}
 
 
 @dataclass
@@ -51,6 +73,7 @@ class EngineSnapshot:
     mouse_status: MouseStatus | None = None
     keyboard_status: KeyboardStatus | None = None
     launcher_status: LauncherStatus | None = None
+    last_dynamic_gesture: DynamicGestureEvent | None = None
     fps: float = 0.0
 
 
@@ -65,6 +88,8 @@ class InteractionEngine:
         self.mouse_controller = mouse_controller
         self.keyboard_controller = keyboard_controller or KeyboardController()
         self.launcher_controller = launcher_controller or LauncherController()
+        self.dynamic_detector = DynamicGestureDetector()
+        self.dynamic_gestures_enabled = True
 
         self.camera: Camera | None = None
         self.recognizer: GestureRecognizer | None = None
@@ -103,6 +128,8 @@ class InteractionEngine:
             self.keyboard_controller.reset()
         if mode != "launcher":
             self.launcher_controller.reset()
+        if mode != "navigation":
+            self.dynamic_detector.reset()
 
     def start(self) -> bool:
         if self.running:
@@ -185,6 +212,17 @@ class InteractionEngine:
                     )
                 elif fire is not None:
                     self.controller.handle(fire, latency_ms=latency_ms)
+
+                landmarks = rec.landmarks if not rec.error and rec.landmarks else None
+                dyn_event = self.dynamic_detector.update(landmarks) if self.dynamic_gestures_enabled else None
+                if dyn_event is not None:
+                    command = DYNAMIC_GESTURE_COMMANDS.get(dyn_event.name)
+                    if command is not None:
+                        self.controller.invoke_command(dyn_event.name, command)
+                    elif dyn_event.name in (CIRCLE_CLOCKWISE, CIRCLE_COUNTERCLOCKWISE):
+                        # No demo command mapped yet; still logged so it's
+                        # visible in the event history and analytics.
+                        self.event_logger.record(dyn_event.name, "detected", status="executed")
             elif mode == "mouse" and self.mouse_controller is not None:
                 # Mouse mode tracks the hand shape directly (pinch distance,
                 # finger extension), not the discrete gesture classifier, so
@@ -228,5 +266,6 @@ class InteractionEngine:
                     mouse_status=mouse_status,
                     keyboard_status=keyboard_status,
                     launcher_status=launcher_status,
+                    last_dynamic_gesture=self.dynamic_detector.last_event,
                     fps=fps,
                 )
