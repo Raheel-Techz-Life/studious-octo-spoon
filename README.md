@@ -10,10 +10,10 @@ stabilization layer that prevents a single held gesture from firing
 repeatedly.
 
 **Status:** the Navigation-mode MVP (gesture → in-app command), the Mouse
-mode spatial pointer (Priority 1), and the Keyboard mode spatial typing
-(Priority 3) from the advanced-features roadmap are implemented and tested.
-App launcher, dynamic gestures, Magic Mode, expressive signs, and face+hand
-interaction are **not yet built** —
+mode spatial pointer (Priority 1), the app Launcher (Priority 2), and the
+Keyboard mode spatial typing (Priority 3) from the advanced-features
+roadmap are implemented and tested. Dynamic gestures, Magic Mode,
+expressive signs, and face+hand interaction are **not yet built** —
 see the Progress checklist below for exactly what's done.
 
 ## Why
@@ -89,13 +89,15 @@ gesturebridge/
 │   ├── gesture_controller.py     # gesture -> in-app command mapping + dispatch
 │   ├── stabilization.py          # hold-to-confirm + cooldown logic (Navigation mode)
 │   ├── mouse_controller.py       # pointer/click/double-click/right-click/drag/scroll state machine
+│   ├── app_launcher.py           # app registry + safe, explicit-target launch function
+│   ├── launcher_controller.py    # pointer->highlight->pinch-to-launch state machine
 │   ├── keyboard_layout.py        # compact QWERTY layout as normalized key rects
 │   ├── spatial_keyboard.py       # pointer->highlight->pinch-to-type state machine
 │   ├── pointer_filter.py         # exponential smoothing for the cursor
 │   ├── interaction_engine.py     # background tracking thread, owns camera+recognizer
 │   └── event_logger.py           # bounded, thread-safe in-memory event history
 ├── ui/
-│   ├── components.py              # Streamlit UI fragments (incl. the virtual keyboard panel)
+│   ├── components.py              # Streamlit UI fragments (keyboard + launcher panels)
 │   └── styles.py                   # dark, high-contrast theme CSS
 ├── utils/
 │   ├── metrics.py                  # pandas aggregation for analytics
@@ -104,6 +106,8 @@ gesturebridge/
     ├── test_stabilization.py
     ├── test_gesture_controller.py
     ├── test_mouse_controller.py
+    ├── test_app_launcher.py
+    ├── test_launcher_controller.py
     └── test_spatial_keyboard.py
 ```
 
@@ -120,6 +124,13 @@ discrete gesture classifier/stabilizer — it reads fingertip positions and
 pinch distances directly every frame (via `hand_landmarks.py`'s geometry
 helpers), smooths the index fingertip with `pointer_filter.py`, and turns
 pinch/pose state transitions into real `pyautogui` pointer calls.
+
+**Data flow (Launcher mode):** same camera + recognizer again, raw landmarks
+go to `launcher_controller.py` - same pointer-smoothing/pinch-distance
+approach once more, but looking up which `app_launcher.py` registry entry
+the pointer is over, and on pinch-release calling `app_launcher.launch()`
+(a validated, explicit-target process launch, never a shell string built
+from anything gesture-derived).
 
 **Data flow (Keyboard mode):** same camera + recognizer again, but the raw
 landmarks go to `spatial_keyboard.py` instead — it reuses the same
@@ -225,6 +236,45 @@ input" requirement). Actually moving the OS cursor and clicking with a real
 hand in front of the camera has **not** been exercised by a human yet; do
 that before relying on it.
 
+## Launcher mode
+
+The index fingertip moves a selection cursor over a grid of configured
+applications; a pinch-and-release over the highlighted tile launches it.
+Ships with a small default set (Notepad/Calculator/File Explorer/Paint on
+Windows, Calculator/TextEdit/Finder on macOS — only the current platform's
+entries are shown), and the sidebar lets you add your own by typing a
+display name and a target (an exe name on PATH, or an absolute path on
+Windows; an application name for macOS's `open -a`).
+
+| Gesture | Action |
+|---|---|
+| Move index finger over a tile | Highlight it |
+| Pinch thumb + index while over a tile, release | Launch that app |
+| (unavailable app, grayed out) | Pinch reports a failure message instead of launching |
+
+**Safety, concretely:** a launch target is never built from a gesture label
+or any recognition output — only from the fixed default list or text the
+user typed into the sidebar. Launching never goes through a shell string:
+Windows uses `os.startfile()` (the same mechanism as double-clicking in
+Explorer) on a target that's been validated as resolvable via PATH or an
+existing file; macOS uses `subprocess.Popen(["open", "-a", name])` with an
+explicit argument list. A target is checked for availability both before
+it's shown as selectable (grayed out otherwise) and again immediately
+before launching.
+
+**What has and hasn't been verified:** the full pointer→highlight→pinch→
+launch state machine (debounced, cooldown-gated, hand-loss-safe, and that
+an unavailable app reports failure without ever calling the real launch
+function) is covered by 14 unit tests using a fake launch backend — no
+test run ever spawns a real process. Live-camera verification in this
+session confirmed the grid renders and re-flows correctly, and the
+"add/remove custom app" flow works end-to-end (added `cmd.exe` as
+"Command Prompt", confirmed it appeared as a 5th tile with an availability
+checkmark, then removed it). Actually launching an app with a real pinch
+gesture has **not** been exercised by a human yet. macOS discovery/launch
+is implemented but entirely untested — this session only had a Windows
+machine to verify against.
+
 ## Keyboard mode
 
 The index fingertip moves a selection cursor over a virtual QWERTY layout
@@ -324,22 +374,36 @@ human-verified live.**
 - [ ] **Not yet verified: an actual human typing a real sentence with their hand.**
 - [x] Explicitly out of scope per the roadmap: system-wide keyboard injection into other applications (in-app typing only, by design)
 
-**Priorities 2, 4-7 — Application launcher, dynamic gestures, Magic Mode,
-expressive hand signs, face+hand interaction: not started.** This is a
-genuinely large scope (the roadmap itself lays out 10 implementation
-phases); Priorities 1 and 3, done properly with real tests rather than code
-that merely compiles, were the right-sized units of work to land solidly in
-one pass each. See the roadmap's own "Implementation order" for the next
-suggested phase (E: app launcher).
+**Priority 2 — Application launcher: implemented and unit-tested, not yet
+human-verified live with a real pinch-launch.**
+- [x] Grid-of-apps launcher UI, reusing the same pointer/pinch pattern as Mouse and Keyboard mode (`core/launcher_controller.py`, `ui/components.py::launcher_panel`)
+- [x] Default app set for both Windows and macOS (only the current platform's entries show); sidebar lets you add/remove custom apps by name + target
+- [x] Safe launching: explicit validated targets only, never a shell string, never built from gesture/recognition output (`core/app_launcher.py`) — `os.startfile()` on Windows, `open -a` with an argument list on macOS
+- [x] Availability checked both before showing a tile as selectable (grayed out otherwise) and again at launch time
+- [x] Debounced (holding a pinch doesn't relaunch) with a confirm cooldown; hand loss mid-pinch launches nothing
+- [x] 14 unit tests (7 for the registry/launch-validation, 7 for the pointer/pinch state machine) against a fake launch backend — no test ever spawns a real process
+- [x] Live-verified: grid renders/re-flows correctly, and the full add/remove-custom-app flow works end-to-end (added `cmd.exe` as "Command Prompt", saw it appear as a 5th tile with an availability checkmark, removed it)
+- [ ] **Not yet verified: an actual human pinching to launch a real app.**
+- [ ] **macOS entirely untested** — implemented per the roadmap's platform-adapter guidance, but this session only had a Windows machine to verify against
+- [x] Window-switching between already-open apps (section 4.4) intentionally skipped — the roadmap marks it a secondary, OS-permission-heavy enhancement
+
+**Priorities 4-7 — Dynamic gestures, Magic Mode, expressive hand signs,
+face+hand interaction: not started.** This is a genuinely large scope (the
+roadmap itself lays out 10 implementation phases); Priorities 1-3, done
+properly with real tests rather than code that merely compiles, were the
+right-sized units of work to land solidly in one pass each. See the
+roadmap's own "Implementation order" for the next suggested phase (F:
+dynamic gestures).
 
 **Priority 8 — Unified interaction modes: partially done.** A `Mode` selector
-(Navigation / Mouse / Keyboard / Paused) exists and is enforced at the engine
-level — switching modes resets the other modes' in-flight gesture state (a
-held pinch doesn't carry into Navigation mode, a half-stabilized gesture
-doesn't carry into Mouse or Keyboard mode, typed text survives a switch but
-a mid-pinch doesn't commit), and only one mode's actions can fire at a time.
-The remaining modes (Launcher, Expressive, Magic, Face+Hand) don't exist yet
-to integrate into this switcher.
+(Navigation / Mouse / Keyboard / Launcher / Paused) exists and is enforced
+at the engine level — switching modes resets the other modes' in-flight
+gesture state (a held pinch doesn't carry into Navigation mode, a
+half-stabilized gesture doesn't carry into Mouse/Keyboard/Launcher mode,
+typed text and launch-feedback survive a switch but a mid-pinch doesn't
+commit), and only one mode's actions can fire at a time. The remaining
+modes (Expressive, Magic, Face+Hand) don't exist yet to integrate into this
+switcher.
 
 **Earlier MVP work (still intact, Navigation mode unchanged):**
 - [x] Camera open/read/release with clear error reporting (`core/camera.py`)
@@ -354,14 +418,15 @@ to integrate into this switcher.
 **To run it:** `streamlit run app.py` (see Setup/Running above).
 
 **Demo readiness:** Navigation mode is demonstrable end-to-end as before.
-Mouse and Keyboard mode's code and unit tests are solid, and both render and
-switch correctly live, but need a human to actually move the cursor/click
-and type a sentence before calling them demo-ready — sensitivity and
-smoothing defaults are reasonable guesses, not tuned against a real hand.
+Mouse, Launcher, and Keyboard mode's code and unit tests are solid, and all
+three render and switch correctly live, but need a human to actually move
+the cursor/click, pinch-launch an app, and type a sentence before calling
+them demo-ready — sensitivity and smoothing defaults are reasonable
+guesses, not tuned against a real hand.
 
-**Next highest-priority task:** get a human to try Mouse and Keyboard mode
-live and tune them, then continue to Priority 2 (app launcher) per the
-roadmap's implementation order.
+**Next highest-priority task:** get a human to try Mouse, Launcher, and
+Keyboard mode live and tune them, then continue to Priority 4 (dynamic
+gestures) per the roadmap's implementation order.
 
 ## Troubleshooting
 
@@ -387,3 +452,10 @@ roadmap's implementation order.
   jitter (more lag), or lower it for a snappier but shakier pointer; raise
   Pointer sensitivity if you have to move your hand too far to cross the
   screen.
+- **A launcher tile shows grayed out / "unavailable"** — its target isn't
+  resolvable on this machine. On Windows that means it isn't on PATH and
+  isn't an existing absolute file path; check the exact spelling (e.g.
+  `code.exe` not `vscode.exe`) or use the full path if it's not on PATH.
+- **Launcher does nothing on macOS** — macOS support (`open -a <name>`) is
+  implemented but has not been tested in this project's development
+  session (Windows-only environment); please report back what you find.

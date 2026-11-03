@@ -173,5 +173,51 @@ CSS = """
     outline: 2px solid var(--gb-warn);
     outline-offset: -2px;
 }
+
+.gb-launcher-grid {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 2.2 / 1;
+    background: var(--gb-surface);
+    border: 1px solid var(--gb-border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.gb-launcher-tile {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.3rem;
+    box-sizing: border-box;
+    border: 1px solid var(--gb-border);
+    background: var(--gb-surface-alt);
+    color: var(--gb-text-dim);
+    transition: background 0.08s ease, color 0.08s ease, transform 0.08s ease;
+    user-select: none;
+}
+
+.gb-launcher-icon { font-size: 1.8rem; line-height: 1; }
+.gb-launcher-name { font-size: 0.8rem; font-weight: 600; text-align: center; padding: 0 0.3rem; }
+
+.gb-launcher-tile-hover {
+    background: rgba(94, 230, 164, 0.18);
+    color: var(--gb-text);
+    border-color: var(--gb-accent-dim);
+    transform: scale(1.04);
+}
+
+.gb-launcher-tile-pinch {
+    background: var(--gb-accent);
+    color: #0f1115;
+    border-color: var(--gb-accent);
+    transform: scale(1.08);
+}
+
+.gb-launcher-tile-unavailable {
+    opacity: 0.35;
+}
 </style>
 """

@@ -23,9 +23,11 @@ import time
 import numpy as np
 import streamlit as st
 
+from core.app_launcher import AppRegistry
 from core.event_logger import EventLogger
 from core.gesture_controller import COMMANDS, DEFAULT_MAPPING, GestureController
 from core.interaction_engine import InteractionEngine
+from core.launcher_controller import LauncherConfig, LauncherController
 from core.mouse_controller import MouseConfig, MouseController
 from core.spatial_keyboard import KeyboardConfig, KeyboardController
 from core.stabilization import GestureStabilizer, StabilizationConfig
@@ -50,6 +52,7 @@ MODE_LABELS = {
     "navigation": "Navigation (gestures)",
     "mouse": "Mouse (pointer control)",
     "keyboard": "Keyboard (spatial typing)",
+    "launcher": "Launcher (open apps)",
     "paused": "Paused",
 }
 
@@ -79,6 +82,9 @@ def init_state() -> None:
         # Keyboard mode settings
         "keyboard_smoothing": 0.4,
         "keyboard_mirror": True,
+        # Launcher mode settings
+        "launcher_smoothing": 0.4,
+        "launcher_mirror": True,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -103,12 +109,17 @@ def init_state() -> None:
             smoothing_alpha=st.session_state.keyboard_smoothing,
             mirror_x=st.session_state.keyboard_mirror,
         ))
+        launcher_controller = LauncherController(AppRegistry(), config=LauncherConfig(
+            smoothing_alpha=st.session_state.launcher_smoothing,
+            mirror_x=st.session_state.launcher_mirror,
+        ))
         st.session_state.engine = InteractionEngine(
             controller=st.session_state.controller,
             event_logger=st.session_state.event_logger,
             nav_stabilizer=nav_stabilizer,
             mouse_controller=mouse_controller,
             keyboard_controller=keyboard_controller,
+            launcher_controller=launcher_controller,
         )
 
 
@@ -271,6 +282,40 @@ def render_sidebar() -> None:
             kb.clear_text()
 
         st.markdown("---")
+        st.markdown("#### Launcher mode")
+        launcher: LauncherController = engine.launcher_controller
+        st.session_state.launcher_smoothing = st.slider(
+            "Launcher pointer smoothing", 0.1, 1.0, st.session_state.launcher_smoothing, 0.05)
+        st.session_state.launcher_mirror = st.toggle(
+            "Launcher mirror", value=st.session_state.launcher_mirror)
+        launcher.set_smoothing(st.session_state.launcher_smoothing)
+        launcher.config.mirror_x = st.session_state.launcher_mirror
+        with st.expander("Add a custom app"):
+            new_name = st.text_input("Display name", key="new_app_name")
+            new_target = st.text_input(
+                "Target (exe name on PATH, or an absolute path)", key="new_app_target",
+                help="Windows: e.g. 'code.exe' or 'C:\\Path\\To\\App.exe'. macOS: the .app name, e.g. 'Safari'.")
+            if st.button("Add app", use_container_width=True, key="add_app_btn"):
+                if new_name and new_target:
+                    launcher.registry.add_custom(new_name, new_target)
+                    st.rerun()
+                else:
+                    st.warning("Enter both a name and a target first.")
+            visible = launcher.registry.visible_entries()
+            custom = [e for e in visible if e.id.startswith("custom_")]
+            if custom:
+                st.caption("Custom apps:")
+                for entry in custom:
+                    c1, c2 = st.columns([4, 1])
+                    with c1:
+                        avail = "✓" if entry.is_available() else "unavailable"
+                        st.caption(f"{entry.icon} {entry.name} ({avail})")
+                    with c2:
+                        if st.button("✕", key=f"remove_{entry.id}"):
+                            launcher.registry.remove(entry.id)
+                            st.rerun()
+
+        st.markdown("---")
         st.session_state.audio_on = st.toggle(
             "Audio feedback", value=st.session_state.audio_on,
             disabled=not st.session_state.audio.available,
@@ -287,6 +332,7 @@ def render_sidebar() -> None:
                 engine.mouse_controller.reset()
             engine.keyboard_controller.reset()
             engine.keyboard_controller.clear_text()
+            engine.launcher_controller.reset()
 
         st.markdown("---")
         st.markdown("#### Gesture mapping (Navigation mode)")
@@ -319,6 +365,9 @@ def live_fragment() -> None:
             elif snap.mode == "keyboard" and snap.keyboard_status and snap.keyboard_status.pointer_norm:
                 display_frame = _draw_pointer_overlay(
                     snap.frame_rgb, snap.keyboard_status.pointer_norm, snap.keyboard_status.pinching)
+            elif snap.mode == "launcher" and snap.launcher_status and snap.launcher_status.pointer_norm:
+                display_frame = _draw_pointer_overlay(
+                    snap.frame_rgb, snap.launcher_status.pointer_norm, snap.launcher_status.pinching)
             frame_placeholder.image(display_frame, channels="RGB", use_container_width=True)
 
         if snap.mode == "navigation":
@@ -371,6 +420,31 @@ def live_fragment() -> None:
                     engine.keyboard_controller.layout, ks.highlighted_key, ks.pinching,
                     ks.text, ks.shift_active, ks.caps_lock,
                 )
+
+        elif snap.mode == "launcher":
+            ls = snap.launcher_status
+            with status_col1:
+                components.stat("Hand tracking", "Yes" if ls and ls.tracking else "No")
+            with status_col2:
+                highlighted_entry = None
+                if ls and ls.highlighted_app_id:
+                    highlighted_entry = engine.launcher_controller.registry.visible_entries()
+                    highlighted_entry = next(
+                        (e for e in highlighted_entry if e.id == ls.highlighted_app_id), None)
+                components.stat("Highlighted", highlighted_entry.name if highlighted_entry else "None")
+            with status_col3:
+                recent = ls and ls.last_launched_name and (time.monotonic() - ls.last_launch_at) < 3.0
+                if recent:
+                    kind = "ok" if ls.last_launch_ok else "danger"
+                    st.markdown(components.pill(ls.last_launched_name, kind), unsafe_allow_html=True)
+            if ls and ls.last_launched_name and (time.monotonic() - ls.last_launch_at) < 3.0:
+                st.caption(ls.last_launch_message or "")
+            entries = engine.launcher_controller.registry.visible_entries()
+            if not entries:
+                st.caption("No apps configured for this platform. Add one in the sidebar.")
+            else:
+                components.launcher_panel(entries, ls.highlighted_app_id if ls else None,
+                                           ls.pinching if ls else False)
 
         elif snap.mode == "paused":
             st.info("Tracking is paused. No commands or pointer actions will fire.")

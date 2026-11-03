@@ -6,7 +6,9 @@ import html
 
 import streamlit as st
 
+from core.app_launcher import AppEntry
 from core.keyboard_layout import KeyboardLayout
+from core.launcher_controller import grid_rects
 
 
 def pill(text: str, kind: str = "neutral") -> str:
@@ -93,3 +95,29 @@ def keyboard_panel(layout: KeyboardLayout, highlighted_key_id: str | None,
         """,
         unsafe_allow_html=True,
     )
+
+
+def launcher_panel(entries: list[AppEntry], highlighted_id: str | None, pinching: bool) -> None:
+    """Renders the app grid, one tile per entry, using the same normalized
+    grid geometry launcher_controller.py uses to decide what's under the
+    pointer, so the highlight always matches what a pinch would select."""
+    rects = grid_rects(len(entries))
+    tiles = []
+    for entry, (x0, y0, x1, y1) in zip(entries, rects):
+        is_active = entry.id == highlighted_id
+        css_class = "gb-launcher-tile"
+        if not entry.is_available():
+            css_class += " gb-launcher-tile-unavailable"
+        elif is_active:
+            css_class += " gb-launcher-tile-pinch" if pinching else " gb-launcher-tile-hover"
+        style = (
+            f"left:{x0 * 100:.2f}%; top:{y0 * 100:.2f}%; "
+            f"width:{(x1 - x0) * 100:.2f}%; height:{(y1 - y0) * 100:.2f}%;"
+        )
+        name = html.escape(entry.name)
+        tiles.append(
+            f'<div class="{css_class}" style="{style}">'
+            f'<div class="gb-launcher-icon">{entry.icon}</div>'
+            f'<div class="gb-launcher-name">{name}</div></div>'
+        )
+    st.markdown(f'<div class="gb-launcher-grid">{"".join(tiles)}</div>', unsafe_allow_html=True)

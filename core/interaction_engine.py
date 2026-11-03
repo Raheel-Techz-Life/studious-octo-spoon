@@ -30,12 +30,13 @@ import numpy as np
 from core.camera import Camera
 from core.event_logger import EventLogger
 from core.gesture_controller import GestureController
+from core.launcher_controller import LauncherController, LauncherStatus
 from core.mouse_controller import MouseController, MouseStatus
 from core.recognizer import GestureRecognizer
 from core.spatial_keyboard import KeyboardController, KeyboardStatus
 from core.stabilization import GestureStabilizer, StabilizationState
 
-MODES = ("navigation", "mouse", "keyboard", "paused")
+MODES = ("navigation", "mouse", "keyboard", "launcher", "paused")
 
 
 @dataclass
@@ -49,18 +50,21 @@ class EngineSnapshot:
     nav_stab_state: StabilizationState | None = None
     mouse_status: MouseStatus | None = None
     keyboard_status: KeyboardStatus | None = None
+    launcher_status: LauncherStatus | None = None
     fps: float = 0.0
 
 
 class InteractionEngine:
     def __init__(self, controller: GestureController, event_logger: EventLogger,
                  nav_stabilizer: GestureStabilizer, mouse_controller: MouseController,
-                 keyboard_controller: KeyboardController | None = None):
+                 keyboard_controller: KeyboardController | None = None,
+                 launcher_controller: LauncherController | None = None):
         self.controller = controller
         self.event_logger = event_logger
         self.nav_stabilizer = nav_stabilizer
         self.mouse_controller = mouse_controller
         self.keyboard_controller = keyboard_controller or KeyboardController()
+        self.launcher_controller = launcher_controller or LauncherController()
 
         self.camera: Camera | None = None
         self.recognizer: GestureRecognizer | None = None
@@ -97,6 +101,8 @@ class InteractionEngine:
             self.nav_stabilizer.reset()
         if mode != "keyboard":
             self.keyboard_controller.reset()
+        if mode != "launcher":
+            self.launcher_controller.reset()
 
     def start(self) -> bool:
         if self.running:
@@ -165,6 +171,7 @@ class InteractionEngine:
             nav_stab_state = None
             mouse_status = None
             keyboard_status = None
+            launcher_status = None
 
             if mode == "navigation":
                 gesture = rec.gesture if not rec.error else None
@@ -197,6 +204,9 @@ class InteractionEngine:
             elif mode == "keyboard":
                 landmarks = rec.landmarks if not rec.error and rec.landmarks else None
                 keyboard_status = self.keyboard_controller.update(landmarks)
+            elif mode == "launcher":
+                landmarks = rec.landmarks if not rec.error and rec.landmarks else None
+                launcher_status = self.launcher_controller.update(landmarks)
             # "paused": do nothing - frame is still captured/displayed, no actions fire
 
             frame_count += 1
@@ -217,5 +227,6 @@ class InteractionEngine:
                     nav_stab_state=nav_stab_state,
                     mouse_status=mouse_status,
                     keyboard_status=keyboard_status,
+                    launcher_status=launcher_status,
                     fps=fps,
                 )
