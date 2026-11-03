@@ -219,5 +219,37 @@ CSS = """
 .gb-launcher-tile-unavailable {
     opacity: 0.35;
 }
+
+.gb-legend {
+    background: var(--gb-surface-alt);
+    border: 1px solid var(--gb-border);
+    border-radius: 10px;
+    padding: 0.6rem 0.8rem;
+    margin-bottom: 0.6rem;
+}
+
+.gb-legend-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--gb-text-dim);
+    margin-bottom: 0.4rem;
+}
+
+.gb-legend-row {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+    font-size: 0.85rem;
+    border-bottom: 1px solid var(--gb-border);
+}
+.gb-legend-row:last-child { border-bottom: none; }
+
+.gb-legend-action { color: var(--gb-text); font-weight: 600; }
+.gb-legend-arrow { color: var(--gb-accent); }
+.gb-legend-effect { color: var(--gb-text-dim); text-align: right; }
 </style>
 """

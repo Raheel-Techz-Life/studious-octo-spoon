@@ -59,6 +59,24 @@ MODE_LABELS = {
     "paused": "Paused",
 }
 
+MOUSE_LEGEND = [
+    ("Move index finger", "Move the pointer"),
+    ("Pinch thumb + index, release", "Click"),
+    ("Pinch twice quickly, same spot", "Double-click"),
+    ("Pinch thumb + middle finger", "Right-click"),
+    ("Pinch, hold ~0.35s, then move", "Drag (release to drop)"),
+    ("Index + middle up, move vertically", "Scroll"),
+]
+
+KEYBOARD_LEGEND = [
+    ("Move index finger over a key", "Highlight it"),
+    ("Pinch while over a key, release", "Type that key"),
+    ("Pinch over Shift", "Capitalize next letter only"),
+    ("Pinch over Caps", "Caps lock (toggle)"),
+    ("Pinch over <-  /  Space / Enter", "Backspace / space / newline"),
+    ("Pinch over Clear", "Erase all typed text"),
+]
+
 st.set_page_config(page_title="GestureBridge", page_icon="🖐️", layout="wide")
 st.markdown(CSS, unsafe_allow_html=True)
 
@@ -397,6 +415,7 @@ def live_fragment() -> None:
                     snap.frame_rgb, snap.launcher_status.pointer_norm, snap.launcher_status.pinching)
             elif snap.mode == "magic" and snap.magic_status:
                 display_frame = draw_magic_overlay(snap.frame_rgb, snap.magic_status)
+            display_frame = _downscale_for_display(display_frame)
             frame_placeholder.image(display_frame, channels="RGB", use_container_width=True)
 
         if snap.mode == "navigation":
@@ -433,6 +452,7 @@ def live_fragment() -> None:
                     st.markdown(components.pill(ms.last_action.replace("_", " ").title(), "ok"),
                                 unsafe_allow_html=True)
             st.caption(f"Engine FPS: {snap.fps:.0f}")
+            components.action_legend(MOUSE_LEGEND, "Mouse mode actions")
 
         elif snap.mode == "keyboard":
             ks = snap.keyboard_status
@@ -450,6 +470,7 @@ def live_fragment() -> None:
                 if recent:
                     st.markdown(components.pill(ks.last_selected_key.replace("CHAR_", ""), "ok"),
                                 unsafe_allow_html=True)
+            components.action_legend(KEYBOARD_LEGEND, "Keyboard mode actions")
             if ks is not None:
                 components.keyboard_panel(
                     engine.keyboard_controller.layout, ks.highlighted_key, ks.pinching,
@@ -514,6 +535,25 @@ def _draw_pointer_overlay(frame_rgb: np.ndarray, pointer_norm: tuple[float, floa
     return out
 
 
+_DISPLAY_MAX_WIDTH = 480  # downscaled before JPEG-encoding for display; recognition already ran on the full frame
+
+
+def _downscale_for_display(frame_rgb: np.ndarray) -> np.ndarray:
+    """Shrinks the frame before Streamlit JPEG-encodes it for display.
+    Recognition/pointer mapping already happened on the full-resolution
+    frame upstream of this call, so this only affects what's shown, not
+    accuracy. JPEG-encoding a smaller image is the main lever here: it ran
+    on every ~150ms UI tick and was real, measurable CPU work competing
+    with the background tracking thread for the GIL."""
+    import cv2
+    h, w = frame_rgb.shape[:2]
+    if w <= _DISPLAY_MAX_WIDTH:
+        return frame_rgb
+    scale = _DISPLAY_MAX_WIDTH / w
+    new_size = (_DISPLAY_MAX_WIDTH, int(h * scale))
+    return cv2.resize(frame_rgb, new_size, interpolation=cv2.INTER_AREA)
+
+
 def render_demo_panel() -> None:
     components.card_open("In-app demo (what Navigation-mode commands act on)")
     idx = st.session_state.demo_index
@@ -552,17 +592,13 @@ def render_history_and_analytics() -> None:
 
         by_command = summary["by_command"]
         if not by_command.empty:
-            import matplotlib.pyplot as plt
-            fig, ax = plt.subplots(figsize=(4, 2.2))
-            fig.patch.set_alpha(0)
-            ax.set_facecolor("none")
-            ax.bar(by_command.index, by_command.values, color="#5ee6a4")
-            ax.tick_params(colors="#a8afc0")
-            for spine in ax.spines.values():
-                spine.set_color("#2b3040")
-            ax.set_ylabel("count", color="#a8afc0")
-            st.pyplot(fig, use_container_width=True)
-            plt.close(fig)
+            # Native st.bar_chart (Vega-Lite, rendered client-side) instead
+            # of matplotlib: matplotlib was rebuilding and PNG-encoding a
+            # whole figure from scratch on every ~150ms fragment tick, which
+            # is real CPU work competing for the GIL with the background
+            # tracking thread - a direct cause of the sluggishness noticed
+            # in Mouse/Keyboard mode. This has no server-side render cost.
+            st.bar_chart(by_command, color="#5ee6a4", height=180)
 
         latencies = [e.latency_ms for e in events if e.latency_ms is not None]
         if latencies:

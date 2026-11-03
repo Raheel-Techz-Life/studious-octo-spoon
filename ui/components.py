@@ -97,6 +97,21 @@ def keyboard_panel(layout: KeyboardLayout, highlighted_key_id: str | None,
     )
 
 
+def action_legend(rows: list[tuple[str, str]], title: str = "What each action does") -> None:
+    """A compact gesture -> action legend, e.g. for Mouse/Keyboard mode so
+    the mapping is visible without reading the README."""
+    row_html = "".join(
+        f'<div class="gb-legend-row"><span class="gb-legend-action">{html.escape(action)}</span>'
+        f'<span class="gb-legend-arrow">&rarr;</span>'
+        f'<span class="gb-legend-effect">{html.escape(effect)}</span></div>'
+        for action, effect in rows
+    )
+    st.markdown(
+        f'<div class="gb-legend"><div class="gb-legend-title">{html.escape(title)}</div>{row_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def launcher_panel(entries: list[AppEntry], highlighted_id: str | None, pinching: bool) -> None:
     """Renders the app grid, one tile per entry, using the same normalized
     grid geometry launcher_controller.py uses to decide what's under the
