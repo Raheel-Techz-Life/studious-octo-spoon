@@ -241,7 +241,16 @@ class InteractionEngine:
                     else:
                         self._snapshot.error = frame_result.error
                 continue
-            first_failure_at = None
+            if first_failure_at is not None:
+                # A failed-then-recovered run of reads is exactly what would
+                # show up to the user as the video blinking out and back -
+                # log it so a recurring report of "video glitching" can be
+                # matched against real camera-driver hiccups here instead of
+                # guessed at blind.
+                gap_s = time.monotonic() - first_failure_at
+                if gap_s > 0.3:
+                    print(f"[camera] recovered after a {gap_s:.2f}s read gap", flush=True)
+                first_failure_at = None
 
             frame_bgr = frame_result.frame_bgr
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)

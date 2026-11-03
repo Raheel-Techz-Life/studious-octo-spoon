@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 from core import hand_landmarks as hl
 from core.keyboard_layout import Key, KeyboardLayout
-from core.pointer_filter import ExponentialSmoother
+from core.pointer_filter import ExponentialSmoother, remap_to_region
 
 
 @dataclass
@@ -22,6 +22,16 @@ class KeyboardConfig:
     mirror_x: bool = True
     pinch_threshold: float = 0.45
     select_cooldown_s: float = 0.25  # minimum gap between two key selections, even on different keys
+    # Active region: a sub-rectangle of the camera frame (normalized 0-1)
+    # that maps to the full key layout. Defaults to the full frame (no
+    # remapping) so a hand has to visit every edge to reach the outer
+    # keys - the app configures a smaller, more forgiving region for live
+    # use (see app.py), but the identity default keeps this controller's
+    # own coordinate math simple and testable in isolation.
+    region_x0: float = 0.0
+    region_y0: float = 0.0
+    region_x1: float = 1.0
+    region_y1: float = 1.0
 
 
 @dataclass
@@ -74,9 +84,10 @@ class KeyboardController:
         index_x, index_y = landmarks[hl.INDEX_TIP]
         if self.config.mirror_x:
             index_x = 1.0 - index_x
-        smooth_x, smooth_y = self._smoother.update(
-            min(1.0, max(0.0, index_x)), min(1.0, max(0.0, index_y))
-        )
+        cfg = self.config
+        norm_x, norm_y = remap_to_region(
+            index_x, index_y, cfg.region_x0, cfg.region_y0, cfg.region_x1, cfg.region_y1)
+        smooth_x, smooth_y = self._smoother.update(norm_x, norm_y)
         self.status.pointer_norm = (smooth_x, smooth_y)
 
         key = self.layout.key_at(smooth_x, smooth_y)

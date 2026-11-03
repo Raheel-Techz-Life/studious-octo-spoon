@@ -14,6 +14,21 @@ than added speculatively.
 from __future__ import annotations
 
 
+def remap_to_region(x: float, y: float, x0: float, y0: float, x1: float, y1: float) -> tuple[float, float]:
+    """Maps a point from the full camera frame (0-1) into a normalized 0-1
+    position relative to a smaller "active region" of that frame, clamped
+    at the edges. A smaller region means less hand travel is needed to
+    cover the full mapped range (mouse screen, keyboard layout, launcher
+    grid) - useful since a comfortably held hand rarely visits the camera
+    frame's extreme edges.
+    """
+    w = max(1e-6, x1 - x0)
+    h = max(1e-6, y1 - y0)
+    nx = min(1.0, max(0.0, (x - x0) / w))
+    ny = min(1.0, max(0.0, (y - y0) / h))
+    return nx, ny
+
+
 class ExponentialSmoother:
     """y[t] = alpha * x[t] + (1 - alpha) * y[t-1]. Higher alpha = less lag,
     more jitter. Lower alpha = smoother, more lag.

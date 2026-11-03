@@ -172,10 +172,14 @@ def init_state() -> None:
         keyboard_controller = KeyboardController(config=KeyboardConfig(
             smoothing_alpha=st.session_state.keyboard_smoothing,
             mirror_x=st.session_state.keyboard_mirror,
+            region_x0=ACTIVE_REGION_MARGIN, region_y0=ACTIVE_REGION_MARGIN,
+            region_x1=1 - ACTIVE_REGION_MARGIN, region_y1=1 - ACTIVE_REGION_MARGIN,
         ))
         launcher_controller = LauncherController(AppRegistry(), config=LauncherConfig(
             smoothing_alpha=st.session_state.launcher_smoothing,
             mirror_x=st.session_state.launcher_mirror,
+            region_x0=ACTIVE_REGION_MARGIN, region_y0=ACTIVE_REGION_MARGIN,
+            region_x1=1 - ACTIVE_REGION_MARGIN, region_y1=1 - ACTIVE_REGION_MARGIN,
         ))
         magic_state = MagicEffectState(MagicConfig())
         expressive_engine = ExpressiveEngine(ExpressiveSignRegistry())
@@ -193,8 +197,17 @@ def init_state() -> None:
         )
 
 
+# How much of the camera frame's edge is trimmed off the "active region"
+# that maps to the full mouse screen / keyboard layout / launcher grid. A
+# hand held at a natural, comfortable distance rarely reaches the frame's
+# actual edges, so without this margin the pointer (or key/app cursor)
+# spends most of its time pinned against one side - previously reported as
+# the pointer/cursor "sitting at the base" and missing intended targets.
+ACTIVE_REGION_MARGIN = 0.12
+
+
 def _build_mouse_controller() -> MouseController:
-    margin = max(0.02, 0.35 / max(0.2, st.session_state.mouse_sensitivity))
+    margin = max(0.02, 0.15 / max(0.2, st.session_state.mouse_sensitivity))
     cfg = MouseConfig(
         smoothing_alpha=st.session_state.mouse_smoothing,
         mirror_x=st.session_state.mouse_mirror,
@@ -218,7 +231,7 @@ def _sync_mouse_config() -> None:
     mc = engine.mouse_controller
     if mc is None:
         return
-    margin = max(0.02, 0.35 / max(0.2, st.session_state.mouse_sensitivity))
+    margin = max(0.02, 0.15 / max(0.2, st.session_state.mouse_sensitivity))
     mc.set_smoothing(st.session_state.mouse_smoothing)
     mc.config.mirror_x = st.session_state.mouse_mirror
     mc.config.region_x0, mc.config.region_y0 = margin, margin

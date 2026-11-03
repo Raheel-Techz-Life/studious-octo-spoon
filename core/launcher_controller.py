@@ -16,7 +16,7 @@ from typing import Callable
 
 from core import hand_landmarks as hl
 from core.app_launcher import AppEntry, AppRegistry, launch as default_launch
-from core.pointer_filter import ExponentialSmoother
+from core.pointer_filter import ExponentialSmoother, remap_to_region
 
 
 @dataclass
@@ -25,6 +25,12 @@ class LauncherConfig:
     mirror_x: bool = True
     pinch_threshold: float = 0.45
     confirm_cooldown_s: float = 1.5  # avoid relaunching the same app repeatedly
+    # Active region: see KeyboardConfig's region_* fields for why this
+    # exists. Defaults to the full frame (identity mapping).
+    region_x0: float = 0.0
+    region_y0: float = 0.0
+    region_x1: float = 1.0
+    region_y1: float = 1.0
 
 
 @dataclass
@@ -102,9 +108,10 @@ class LauncherController:
         index_x, index_y = landmarks[hl.INDEX_TIP]
         if self.config.mirror_x:
             index_x = 1.0 - index_x
-        smooth_x, smooth_y = self._smoother.update(
-            min(1.0, max(0.0, index_x)), min(1.0, max(0.0, index_y))
-        )
+        cfg = self.config
+        norm_x, norm_y = remap_to_region(
+            index_x, index_y, cfg.region_x0, cfg.region_y0, cfg.region_x1, cfg.region_y1)
+        smooth_x, smooth_y = self._smoother.update(norm_x, norm_y)
         self.status.pointer_norm = (smooth_x, smooth_y)
 
         entry = self._entry_at(smooth_x, smooth_y)
