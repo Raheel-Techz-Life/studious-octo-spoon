@@ -53,6 +53,7 @@ class KeyboardController:
         self.config = config or KeyboardConfig()
         self._smoother = ExponentialSmoother(self.config.smoothing_alpha)
         self._pinched = False
+        self._pinch_key_counts: dict[str, int] = {}
         self._last_select_time = 0.0
         self.status = KeyboardStatus()
 
@@ -65,6 +66,7 @@ class KeyboardController:
         shift = self.status.shift_active
         caps = self.status.caps_lock
         self._pinched = False
+        self._pinch_key_counts = {}
         self._smoother.reset()
         self.status = KeyboardStatus(text=text, shift_active=shift, caps_lock=caps)
 
@@ -96,14 +98,28 @@ class KeyboardController:
         pinch_dist = hl.distance(landmarks, hl.THUMB_TIP, hl.INDEX_TIP) / scale
         is_pinched = pinch_dist < self.config.pinch_threshold
 
+        # A shaky hand tends to flick sideways right at the instant the
+        # fingers come apart to release the pinch, which - if only that one
+        # frame's position decided the key - made the wrong neighboring key
+        # get selected. Instead, track every key seen under the fingertip
+        # for the whole pinch hold and select whichever one it spent the
+        # most frames over; a brief end-of-release jitter is then outvoted
+        # by the frames spent actually resting on the intended key.
+        if is_pinched and key is not None:
+            self._pinch_key_counts[key.id] = self._pinch_key_counts.get(key.id, 0) + 1
+
         now = time.monotonic()
         if is_pinched and not self._pinched:
             self._pinched = True
         elif not is_pinched and self._pinched:
             self._pinched = False
+            settled_id = max(self._pinch_key_counts, key=self._pinch_key_counts.get) \
+                if self._pinch_key_counts else None
+            settled_key = self.layout.get(settled_id) if settled_id else None
+            self._pinch_key_counts = {}
             since_last = now - self._last_select_time
-            if key is not None and since_last >= self.config.select_cooldown_s:
-                self._select(key, now)
+            if settled_key is not None and since_last >= self.config.select_cooldown_s:
+                self._select(settled_key, now)
 
         self.status.pinching = self._pinched
         return self.status

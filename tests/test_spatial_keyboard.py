@@ -136,6 +136,24 @@ def test_hand_lost_mid_pinch_does_not_select_but_keeps_typed_text():
     assert controller.status.tracking is False
 
 
+def test_a_brief_jitter_onto_a_neighbor_right_before_release_does_not_steal_the_selection():
+    # Simulates a shaky hand: the fingertip rests on "A" for most of the
+    # pinch hold, then flicks onto neighboring "S" for a single frame right
+    # as the pinch releases. The key held for the most frames should win,
+    # not whatever key happened to be under the fingertip on the exact
+    # release frame.
+    controller = make_controller()
+    layout = controller.layout
+    pos_a = key_center(layout, "CHAR_A")
+    pos_s = key_center(layout, "CHAR_S")
+    controller.update(make_hand(index=pos_a, thumb=_FAR_THUMB))  # hover
+    for _ in range(5):
+        controller.update(make_hand(index=pos_a, thumb=pos_a))  # held pinch over A
+    controller.update(make_hand(index=pos_s, thumb=pos_s))  # one jittery frame over S, still pinched
+    controller.update(make_hand(index=pos_s, thumb=_FAR_THUMB))  # release
+    assert controller.status.text == "a"
+
+
 def test_select_cooldown_blocks_an_immediate_second_selection():
     controller = make_controller(select_cooldown_s=5.0)
     layout = controller.layout

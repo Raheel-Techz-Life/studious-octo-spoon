@@ -139,7 +139,7 @@ def init_state() -> None:
         "mouse_drag_enabled": True,
         "mouse_scroll_enabled": True,
         # Keyboard mode settings
-        "keyboard_smoothing": 0.4,
+        "keyboard_smoothing": 0.25,  # lower = calmer cursor; shaky hands need more damping than Mouse mode's default
         "keyboard_mirror": True,
         # Launcher mode settings
         "launcher_smoothing": 0.4,
@@ -643,6 +643,17 @@ def live_fragment() -> None:
         elif snap.mode == "paused":
             st.info("Tracking is paused. No commands or pointer actions will fire.")
 
+
+@st.fragment(run_every=1.0)
+def slow_fragment() -> None:
+    # The demo panel and event history/analytics (a dataframe + a chart)
+    # don't need to redraw at the video's ~7fps UI rate - doing so was
+    # redrawing a dataframe and chart widget several times a second for no
+    # visible benefit, which showed up as "the video keeps glitching,
+    # appearing and disappearing" (everything in that area repainting
+    # together looked like the whole section was flickering). Giving them
+    # their own, much slower fragment keeps the live feed's own updates
+    # smooth without losing live-ish event history.
     render_demo_panel()
     render_history_and_analytics()
 
@@ -787,6 +798,7 @@ def main() -> None:
 
     render_sidebar()
     live_fragment()
+    slow_fragment()
     render_manual_fallback()
 
 
