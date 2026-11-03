@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+assets/gesture_recognizer.task
+.pytest_cache/
+*.log

@@ -1,0 +1,7 @@
+opencv-python
+mediapipe
+numpy
+streamlit>=1.37
+pandas
+matplotlib
+pyttsx3
