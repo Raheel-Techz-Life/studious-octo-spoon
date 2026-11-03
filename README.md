@@ -12,10 +12,10 @@ repeatedly.
 **Status:** the Navigation-mode MVP (gesture → in-app command), the Mouse
 mode spatial pointer (Priority 1), the app Launcher (Priority 2), the
 Keyboard mode spatial typing (Priority 3), swipe/circle dynamic gestures
-(Priority 4), and Magic Mode (Priority 5) from the advanced-features
-roadmap are implemented and tested. Expressive signs and face+hand
-interaction are **not yet built** —
-see the Progress checklist below for exactly what's done.
+(Priority 4), Magic Mode (Priority 5), and expressive celebration signs
+(Priority 6) from the advanced-features roadmap are implemented and
+tested. Face+hand interaction is **not yet built** — see the Progress
+checklist below for exactly what's done.
 
 ## Why
 
@@ -96,12 +96,14 @@ gesturebridge/
 │   ├── keyboard_layout.py        # compact QWERTY layout as normalized key rects
 │   ├── spatial_keyboard.py       # pointer->highlight->pinch-to-type state machine
 │   ├── magic_effects.py          # Magic Mode's state machine (idle glow + circle-triggered burst)
+│   ├── expressive_signs.py       # celebration-sign registry + trigger engine (Expressive mode)
 │   ├── pointer_filter.py         # exponential smoothing for the cursor
 │   ├── interaction_engine.py     # background tracking thread, owns camera+recognizer
 │   └── event_logger.py           # bounded, thread-safe in-memory event history
 ├── ui/
 │   ├── components.py              # Streamlit UI fragments (keyboard + launcher panels)
 │   ├── magic_overlay.py            # Magic Mode's OpenCV rendering (ring/runes/particles)
+│   ├── expressive_overlay.py       # Expressive mode's OpenCV rendering (confetti/heart)
 │   └── styles.py                   # dark, high-contrast theme CSS
 ├── utils/
 │   ├── metrics.py                  # pandas aggregation for analytics
@@ -115,7 +117,9 @@ gesturebridge/
     ├── test_launcher_controller.py
     ├── test_spatial_keyboard.py
     ├── test_magic_effects.py
-    └── test_magic_overlay.py
+    ├── test_magic_overlay.py
+    ├── test_expressive_signs.py
+    └── test_expressive_overlay.py
 ```
 
 **Data flow (Navigation mode):** `camera.py` grabs a frame → `recognizer.py`
@@ -161,6 +165,18 @@ particle positions purely as numbers. `ui/magic_overlay.py` then reads
 that state and draws it onto the frame with OpenCV - rendering is fully
 separated from the state machine specifically so the animation's timeline
 could be unit-tested without touching a single pixel.
+
+**Data flow (Expressive mode):** same camera + recognizer again, but like
+Navigation mode it uses the discrete gesture classifier output (not raw
+landmarks - a celebratory sign is a static pose, not a hand shape to track
+continuously) → `expressive_signs.py`'s `GestureStabilizer` (same class
+Navigation mode uses, a separate instance) requires it to hold steady and
+enforces a cooldown → a `ExpressiveSignRegistry` lookup decides whether
+that pose is a registered sign → if so, spawns either confetti particles
+(simple velocity + gravity physics, advanced every frame) or starts a
+pulsing-heart timer. `ui/expressive_overlay.py` reads that state and draws
+it, again fully separated from the state machine for the same testability
+reason as Magic mode.
 
 ### Why there's now a background tracking thread
 
@@ -391,6 +407,45 @@ identical detector), and the burst logic is fully covered by synthetic
 circular-trajectory unit tests, but the literal "wave a hand in a circle
 and see the burst" moment is the one piece still waiting on a human.
 
+## Expressive mode
+
+A small, extensible registry maps static hand poses the recognizer already
+knows about to celebratory visual effects - hold one steady and it fires.
+This is its own mode (not layered onto Navigation) specifically so the same
+physical gesture can mean something different in each: `Thumb_Up` means
+"confirm" in Navigation mode and "celebrate" here, with no conflict.
+
+| Sign | Effect |
+|---|---|
+| Thumbs Up | Confetti-style particle celebration |
+| Victory | Confetti burst |
+| I-Love-You sign | A pulsing heart |
+
+Only gestures the bundled MediaPipe model actually recognizes are mapped -
+no "finger heart" or similar pose that isn't in this model's label set,
+since claiming to detect something without verifying it first is exactly
+the overclaim the project brief warns against. The registry
+(`core/expressive_signs.py`) is designed to be extended without touching
+any dispatch code: `registry.register(ExpressiveSign(...))` adds a new
+sign, and the sidebar lets you enable/disable each one individually.
+Hold-to-confirm and cooldown reuse `core/stabilization.py`'s
+`GestureStabilizer` unchanged (now with an injectable clock, added during
+this phase so it could be unit-tested deterministically the same way the
+rest of the project's timing-based modules already were) - the same
+tested logic that prevents a held gesture from repeat-firing, applied here
+instead of to Navigation commands.
+
+**What has and hasn't been verified:** 14 unit tests (11 for the trigger
+engine with a fake clock - covering each sign, disabled signs, custom
+registered signs, cooldown, particle physics, and hand-loss handling - 3
+rendering smoke tests) all pass. The engine's wiring into the background
+tracking loop was confirmed with a headless integration test showing it
+starts cleanly in Expressive mode and correctly stays inert with no hand
+in frame. Actually holding a real Thumbs Up / Victory / I-Love-You sign
+in front of the camera and watching the effect fire has **not** been
+exercised by a human yet - same gap as every other spatial mode in this
+project, for the same reason (no physical hands here to test with).
+
 ## Keyboard mode
 
 The index fingertip moves a selection cursor over a virtual QWERTY layout
@@ -536,21 +591,37 @@ human-verified live.**
 - [ ] **Not yet verified: actually tracing a full circle and watching the burst fire live.** Needs a second pair of hands at the keyboard and the camera simultaneously; the burst logic itself is fully covered by synthetic-trajectory unit tests, and the identical circle detector is already exercised against real camera input via Navigation mode's dynamic gestures, but the literal "wave a circle, see sparks" moment is still unconfirmed by a human.
 - [x] Two-hand activation pose (brief's "where practical" optional item) intentionally skipped — the recognizer is configured for single-hand tracking throughout the app, and adding a second hand is a bigger architecture change than this priority's scope justified
 
-**Priorities 6-7 — Expressive hand signs, face+hand interaction: not
-started.** This is a genuinely large scope (the roadmap itself lays out 10
-implementation phases); Priorities 1-5, done properly with real tests
-rather than code that merely compiles, were the right-sized units of work
-to land solidly in one pass each. See the roadmap's own "Implementation
-order" for the next suggested phase (H: expressive hand signs).
+**Priority 6 — Expressive hand signs: implemented and unit-tested, not yet
+human-verified live.**
+- [x] Small, extensible sign registry (`core/expressive_signs.py`) — adding a new sign is one `registry.register(ExpressiveSign(...))` call, no dispatch code to touch
+- [x] Three signs mapped to effects, all gestures the bundled MediaPipe model actually recognizes (no claimed "finger heart" or other unverified pose): Thumbs Up → celebrate, Victory → confetti, I-Love-You sign → pulsing heart
+- [x] Its own Mode (not layered onto Navigation), so the same physical gesture can mean something different in each without conflict — satisfies the brief's "keep expressive effects in their own interaction mode" by construction, not by a special-case check
+- [x] Hold-to-confirm + cooldown reuse `core/stabilization.py`'s `GestureStabilizer` unchanged (a separate instance from Navigation's) rather than a third reimplementation
+- [x] Sidebar lets you enable/disable each registered sign individually
+- [x] Simple particle physics for confetti (velocity + gravity, spin) and a pulsing heart-curve for the I-Love-You sign, rendered via OpenCV (`ui/expressive_overlay.py`), state/rendering split the same way Magic mode's is
+- [x] 14 unit tests (11 engine tests with a fake clock, 3 rendering smoke tests) — 86 total now passing
+- [x] A real bug found and fixed while wiring this up: `GestureStabilizer` (used by Navigation mode since the original MVP) had no injectable clock and the same "`0.0` sentinel for last-fired-at" bug `dynamic_gestures.py` was caught and fixed for earlier — invisible with the real clock, but it would have made every fake-clock test here flaky. Fixed at the source rather than worked around in tests, and confirmed Navigation mode's own existing stabilization tests still pass unchanged.
+- [x] Live-verified: the mode switches in cleanly, the sign-registry sidebar checkboxes render and the status panel correctly lists registered signs; a headless integration test confirmed the engine starts in Expressive mode and stays correctly inert (no false triggers) with no hand in frame
+- [ ] **Not yet verified: an actual human holding a real Thumbs Up / Victory / I-Love-You sign and watching the effect fire.** Same gap as every other spatial mode in this project, for the same reason.
+
+**Priority 7 — Face+hand interaction: not started.** This is a genuinely
+large scope (the roadmap itself lays out 10 implementation phases);
+Priorities 1-6, done properly with real tests rather than code that merely
+compiles, were the right-sized units of work to land solidly in one pass
+each. See the roadmap's own "Implementation order" for the final suggested
+phase (I: face+hand interaction) — note its own privacy constraints
+(no identification, no emotion recognition, no unnecessary retention)
+before starting it.
 
 **Priority 8 — Unified interaction modes: partially done.** A `Mode` selector
-(Navigation / Mouse / Keyboard / Launcher / Magic / Paused) exists and is
-enforced at the engine level — switching modes resets the other modes'
-in-flight gesture state (a held pinch doesn't carry into Navigation mode, a
-half-stabilized gesture doesn't carry into Mouse/Keyboard/Launcher mode,
-typed text and launch-feedback survive a switch but a mid-pinch doesn't
-commit, a cleared burst doesn't come back), and only one mode's actions
-can fire at a time. The remaining modes (Expressive, Face+Hand) don't
+(Navigation / Mouse / Keyboard / Launcher / Magic / Expressive / Paused)
+exists and is enforced at the engine level — switching modes resets the
+other modes' in-flight gesture state (a held pinch doesn't carry into
+Navigation mode, a half-stabilized gesture doesn't carry into
+Mouse/Keyboard/Launcher mode, typed text and launch-feedback survive a
+switch but a mid-pinch doesn't commit, a cleared burst or confetti effect
+doesn't come back), and only one mode's actions can fire at a time. The
+remaining mode (Face+Hand) doesn't
 exist yet to integrate into this switcher.
 
 **Earlier MVP work (still intact, Navigation mode unchanged):**
@@ -578,17 +649,18 @@ without the video frame itself visibly rendered.
 **Demo readiness:** Navigation mode's static gestures are demonstrable
 end-to-end as before, and its dynamic swipe/circle detection has a
 confirmed-working dispatch path (headless-verified) layered on top. Mouse,
-Launcher, Keyboard, and Magic mode's code and unit tests are solid, and all
-four render and switch correctly live — Magic mode's idle glow and
-speed-driven intensity were confirmed against a real hand — but all five
-features need a human to actually move/click/launch/type/swipe/circle with
-a real hand before calling them fully demo-ready — thresholds and sensitivity
-defaults are reasoned guesses, not tuned against real motion.
+Launcher, Keyboard, Magic, and Expressive mode's code and unit tests are
+solid, and all five render and switch correctly live — Magic mode's idle
+glow and speed-driven intensity were confirmed against a real hand — but
+all six features need a human to actually move/click/launch/type/swipe/
+circle/sign with a real hand before calling them fully demo-ready —
+thresholds and sensitivity defaults are reasoned guesses, not tuned
+against real motion.
 
 **Next highest-priority task:** get a human to try Mouse, Launcher,
-Keyboard, Magic mode, and the dynamic gestures live and tune them, then
-continue to Priority 6 (expressive hand signs) per the roadmap's
-implementation order.
+Keyboard, Magic mode, Expressive signs, and the dynamic gestures live and
+tune them, then continue to Priority 7 (face+hand interaction) per the
+roadmap's implementation order.
 
 ## Troubleshooting
 

@@ -39,6 +39,7 @@ from core.dynamic_gestures import (
     DynamicGestureEvent,
 )
 from core.event_logger import EventLogger
+from core.expressive_signs import ExpressiveEngine, ExpressiveStatus
 from core.gesture_controller import GestureController
 from core.launcher_controller import LauncherController, LauncherStatus
 from core.magic_effects import MagicEffectState, MagicStatus
@@ -47,7 +48,7 @@ from core.recognizer import GestureRecognizer
 from core.spatial_keyboard import KeyboardController, KeyboardStatus
 from core.stabilization import GestureStabilizer, StabilizationState
 
-MODES = ("navigation", "mouse", "keyboard", "launcher", "magic", "paused")
+MODES = ("navigation", "mouse", "keyboard", "launcher", "magic", "expressive", "paused")
 
 # Dynamic (motion) gestures only act in Navigation mode, where they drive
 # the same in-app demo commands static gestures do. Circular movement has
@@ -75,6 +76,7 @@ class EngineSnapshot:
     keyboard_status: KeyboardStatus | None = None
     launcher_status: LauncherStatus | None = None
     magic_status: MagicStatus | None = None
+    expressive_status: ExpressiveStatus | None = None
     last_dynamic_gesture: DynamicGestureEvent | None = None
     fps: float = 0.0
 
@@ -84,7 +86,8 @@ class InteractionEngine:
                  nav_stabilizer: GestureStabilizer, mouse_controller: MouseController,
                  keyboard_controller: KeyboardController | None = None,
                  launcher_controller: LauncherController | None = None,
-                 magic_state: MagicEffectState | None = None):
+                 magic_state: MagicEffectState | None = None,
+                 expressive_engine: ExpressiveEngine | None = None):
         self.controller = controller
         self.event_logger = event_logger
         self.nav_stabilizer = nav_stabilizer
@@ -92,6 +95,7 @@ class InteractionEngine:
         self.keyboard_controller = keyboard_controller or KeyboardController()
         self.launcher_controller = launcher_controller or LauncherController()
         self.magic_state = magic_state or MagicEffectState()
+        self.expressive_engine = expressive_engine or ExpressiveEngine()
         self.dynamic_detector = DynamicGestureDetector()
         self.dynamic_gestures_enabled = True
 
@@ -136,6 +140,8 @@ class InteractionEngine:
             self.dynamic_detector.reset()
         if mode != "magic":
             self.magic_state.reset()
+        if mode != "expressive":
+            self.expressive_engine.reset()
 
     def start(self) -> bool:
         if self.running:
@@ -206,6 +212,7 @@ class InteractionEngine:
             keyboard_status = None
             launcher_status = None
             magic_status = None
+            expressive_status = None
 
             if mode == "navigation":
                 gesture = rec.gesture if not rec.error else None
@@ -255,6 +262,13 @@ class InteractionEngine:
             elif mode == "magic":
                 landmarks = rec.landmarks if not rec.error and rec.landmarks else None
                 magic_status = self.magic_state.update(landmarks)
+            elif mode == "expressive":
+                # Expressive signs key off the discrete gesture classifier
+                # (like Navigation mode), not raw landmarks - a "sign" is a
+                # static pose, not a hand shape to track continuously.
+                gesture = rec.gesture if not rec.error else None
+                confidence = rec.confidence if not rec.error else 0.0
+                expressive_status = self.expressive_engine.update(gesture, confidence)
             # "paused": do nothing - frame is still captured/displayed, no actions fire
 
             frame_count += 1
@@ -277,6 +291,7 @@ class InteractionEngine:
                     keyboard_status=keyboard_status,
                     launcher_status=launcher_status,
                     magic_status=magic_status,
+                    expressive_status=expressive_status,
                     last_dynamic_gesture=self.dynamic_detector.last_event,
                     fps=fps,
                 )

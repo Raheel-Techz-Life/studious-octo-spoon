@@ -25,6 +25,7 @@ import streamlit as st
 
 from core.app_launcher import AppRegistry
 from core.event_logger import EventLogger
+from core.expressive_signs import ExpressiveEngine, ExpressiveSignRegistry
 from core.gesture_controller import COMMANDS, DEFAULT_MAPPING, GestureController
 from core.interaction_engine import InteractionEngine
 from core.launcher_controller import LauncherConfig, LauncherController
@@ -33,6 +34,7 @@ from core.mouse_controller import MouseConfig, MouseController
 from core.spatial_keyboard import KeyboardConfig, KeyboardController
 from core.stabilization import GestureStabilizer, StabilizationConfig
 from ui import components
+from ui.expressive_overlay import draw_expressive_overlay
 from ui.magic_overlay import draw_magic_overlay
 from ui.styles import CSS
 from utils.audio_feedback import AudioFeedback
@@ -56,6 +58,7 @@ MODE_LABELS = {
     "keyboard": "Keyboard (spatial typing)",
     "launcher": "Launcher (open apps)",
     "magic": "Magic (circle for effects)",
+    "expressive": "Expressive (celebrate signs)",
     "paused": "Paused",
 }
 
@@ -138,6 +141,7 @@ def init_state() -> None:
             mirror_x=st.session_state.launcher_mirror,
         ))
         magic_state = MagicEffectState(MagicConfig())
+        expressive_engine = ExpressiveEngine(ExpressiveSignRegistry())
         st.session_state.engine = InteractionEngine(
             controller=st.session_state.controller,
             event_logger=st.session_state.event_logger,
@@ -146,6 +150,7 @@ def init_state() -> None:
             keyboard_controller=keyboard_controller,
             launcher_controller=launcher_controller,
             magic_state=magic_state,
+            expressive_engine=expressive_engine,
         )
 
 
@@ -359,6 +364,23 @@ def render_sidebar() -> None:
         magic.config.idle_rotation_speed_deg_s = st.session_state.magic_rotation_speed
 
         st.markdown("---")
+        st.markdown("#### Expressive mode")
+        st.caption(
+            "Hold a registered sign steady to trigger its effect. Separate "
+            "from Navigation mode, so the same gesture can mean something "
+            "different here without conflict."
+        )
+        expressive: ExpressiveEngine = engine.expressive_engine
+        for sign in expressive.registry.signs:
+            enabled = st.checkbox(
+                f"{sign.icon} {sign.display_name} → {sign.action}",
+                value=sign.enabled, key=f"sign_enabled_{sign.id}",
+            )
+            if enabled != sign.enabled:
+                expressive.registry.set_enabled(sign.id, enabled)
+                st.rerun()
+
+        st.markdown("---")
         st.session_state.audio_on = st.toggle(
             "Audio feedback", value=st.session_state.audio_on,
             disabled=not st.session_state.audio.available,
@@ -378,6 +400,7 @@ def render_sidebar() -> None:
             engine.launcher_controller.reset()
             engine.dynamic_detector.reset()
             engine.magic_state.reset()
+            engine.expressive_engine.reset()
 
         st.markdown("---")
         st.markdown("#### Gesture mapping (Navigation mode)")
@@ -415,6 +438,8 @@ def live_fragment() -> None:
                     snap.frame_rgb, snap.launcher_status.pointer_norm, snap.launcher_status.pinching)
             elif snap.mode == "magic" and snap.magic_status:
                 display_frame = draw_magic_overlay(snap.frame_rgb, snap.magic_status)
+            elif snap.mode == "expressive" and snap.expressive_status:
+                display_frame = draw_expressive_overlay(snap.frame_rgb, snap.expressive_status)
             display_frame = _downscale_for_display(display_frame)
             frame_placeholder.image(display_frame, channels="RGB", use_container_width=True)
 
@@ -513,6 +538,25 @@ def live_fragment() -> None:
                     st.markdown(components.pill("Casting!", "ok"), unsafe_allow_html=True)
             if ms and not ms.tracking:
                 st.caption("Show your hand to the camera, then trace a full circle to cast.")
+
+        elif snap.mode == "expressive":
+            es = snap.expressive_status
+            with status_col1:
+                label = es.gesture.replace("_", " ") if es and es.gesture else "No hand detected"
+                components.stat("Recognized sign", label)
+            with status_col2:
+                components.stat("Confidence", f"{es.confidence:.2f}" if es else "0.00")
+            with status_col3:
+                recent = es and es.active_sign_id and es.effect_progress < 1.0
+                if recent:
+                    st.markdown(components.pill(f"{es.active_action}!", "ok"), unsafe_allow_html=True)
+            if es is not None and es.stab_progress > 0.0:
+                st.caption("Hold steady...")
+                components.progress_bar(es.stab_progress)
+            registry_list = ", ".join(
+                f"{s.icon} {s.display_name}" for s in engine.expressive_engine.registry.signs if s.enabled
+            )
+            st.caption(f"Registered signs: {registry_list or 'none enabled'}")
 
         elif snap.mode == "paused":
             st.info("Tracking is paused. No commands or pointer actions will fire.")
