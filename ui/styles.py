@@ -33,8 +33,16 @@ CSS = """
     color: var(--gb-text);
 }
 
-.stApp, .stApp p, .stApp span, .stApp label {
+.stApp, .stApp p, .stApp label,
+.stApp span:not([data-testid="stIconMaterial"]) {
     font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Never override Streamlit's own icon font - doing so renders icons as
+   their raw ligature name (e.g. "keyboard_double_arrow_right") instead
+   of the glyph. */
+[data-testid="stIconMaterial"] {
+    font-family: "Material Symbols Outlined" !important;
 }
 
 [data-testid="stSidebar"] {
