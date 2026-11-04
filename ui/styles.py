@@ -10,32 +10,60 @@ CSS = """
     --gb-text: #f2f4f8;
     --gb-text-dim: #a8afc0;
     --gb-accent: #5ee6a4;
+    --gb-accent2: #4ac4ff;
     --gb-accent-dim: #2e7a56;
     --gb-warn: #f5c451;
     --gb-danger: #f26d6d;
 }
 
 .stApp {
-    background-color: var(--gb-bg);
+    background:
+        radial-gradient(1200px 600px at 85% -10%, rgba(74,196,255,0.08), transparent 60%),
+        radial-gradient(1000px 500px at -10% 10%, rgba(94,230,164,0.07), transparent 55%),
+        var(--gb-bg);
     color: var(--gb-text);
+}
+
+.stButton > button {
+    border-radius: 10px !important;
+    border: 1px solid var(--gb-border) !important;
+    transition: transform 0.08s ease, border-color 0.15s ease !important;
+}
+.stButton > button:hover {
+    border-color: var(--gb-accent-dim) !important;
+    transform: translateY(-1px);
 }
 
 .gb-header {
+    position: relative;
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    padding: 1rem 1.25rem;
-    background: var(--gb-surface);
+    padding: 1.1rem 1.4rem;
+    background: linear-gradient(145deg, var(--gb-surface), var(--gb-surface-alt));
     border: 1px solid var(--gb-border);
-    border-radius: 16px;
+    border-radius: 18px;
     margin-bottom: 1rem;
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+}
+
+.gb-header::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--gb-accent), var(--gb-accent2));
 }
 
 .gb-wordmark {
-    font-size: 1.6rem;
+    font-size: 1.75rem;
     font-weight: 800;
     letter-spacing: -0.02em;
-    color: var(--gb-text);
+    background: linear-gradient(90deg, var(--gb-text) 30%, var(--gb-accent) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
 }
 
 .gb-tagline {
@@ -49,6 +77,11 @@ CSS = """
     border-radius: 16px;
     padding: 1.1rem 1.25rem;
     margin-bottom: 1rem;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+    transition: border-color 0.15s ease;
+}
+.gb-card:hover {
+    border-color: var(--gb-accent-dim);
 }
 
 .gb-card h4 {
@@ -69,7 +102,7 @@ CSS = """
     border: 1px solid var(--gb-border);
 }
 
-.gb-pill-ok { background: rgba(94,230,164,0.12); color: var(--gb-accent); border-color: var(--gb-accent-dim); }
+.gb-pill-ok { background: rgba(94,230,164,0.12); color: var(--gb-accent); border-color: var(--gb-accent-dim); box-shadow: 0 0 12px rgba(94,230,164,0.15); }
 .gb-pill-warn { background: rgba(245,196,81,0.12); color: var(--gb-warn); border-color: #8a6a1f; }
 .gb-pill-danger { background: rgba(242,109,109,0.12); color: var(--gb-danger); border-color: #8a2f2f; }
 .gb-pill-neutral { background: var(--gb-surface-alt); color: var(--gb-text-dim); }
@@ -98,7 +131,7 @@ CSS = """
 
 .gb-progress-fill {
     height: 100%;
-    background: var(--gb-accent);
+    background: linear-gradient(90deg, var(--gb-accent), var(--gb-accent2));
     transition: width 0.1s linear;
 }
 
@@ -163,10 +196,11 @@ CSS = """
 }
 
 .gb-key-pinch {
-    background: var(--gb-accent);
+    background: linear-gradient(135deg, var(--gb-accent), var(--gb-accent2));
     color: #0f1115;
     border-color: var(--gb-accent);
     transform: scale(1.08);
+    box-shadow: 0 0 16px rgba(94,230,164,0.35);
 }
 
 .gb-key-modifier-on {
@@ -210,10 +244,11 @@ CSS = """
 }
 
 .gb-launcher-tile-pinch {
-    background: var(--gb-accent);
+    background: linear-gradient(135deg, var(--gb-accent), var(--gb-accent2));
     color: #0f1115;
     border-color: var(--gb-accent);
     transform: scale(1.08);
+    box-shadow: 0 0 16px rgba(94,230,164,0.35);
 }
 
 .gb-launcher-tile-unavailable {
