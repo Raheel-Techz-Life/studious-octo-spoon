@@ -498,6 +498,14 @@ def live_fragment() -> None:
                 elif snap.mode == "face_hand" and snap.face_hand_status:
                     display_frame = draw_face_hand_overlay(snap.frame_rgb, snap.face_hand_status)
                 display_frame = _downscale_for_display(display_frame)
+                # A non-contiguous or non-uint8 buffer (an overlay drawn onto
+                # a view/slice rather than a fresh copy, or any stray float
+                # math upstream) can encode into a corrupt/empty image with
+                # no Python-level exception - the browser just shows a
+                # broken-image icon instead of a picture. Normalize right
+                # before handing it to Streamlit so that class of bug can't
+                # reach the browser silently.
+                display_frame = np.ascontiguousarray(display_frame, dtype=np.uint8)
                 frame_placeholder.image(display_frame, channels="RGB", use_container_width=True)
             except Exception as exc:  # noqa: BLE001
                 # An overlay-drawing bug must never take the whole video feed
@@ -681,7 +689,7 @@ def _draw_pointer_overlay(frame_rgb: np.ndarray, pointer_norm: tuple[float, floa
     return out
 
 
-_DISPLAY_MAX_WIDTH = 480  # downscaled before JPEG-encoding for display; recognition already ran on the full frame
+_DISPLAY_MAX_WIDTH = 360  # downscaled before JPEG-encoding for display; recognition already ran on the full frame
 
 
 def _downscale_for_display(frame_rgb: np.ndarray) -> np.ndarray:
