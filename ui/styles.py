@@ -40,9 +40,11 @@ CSS = """
 
 /* Never override Streamlit's own icon font - doing so renders icons as
    their raw ligature name (e.g. "keyboard_double_arrow_right") instead
-   of the glyph. */
+   of the glyph. The font Streamlit actually loads for these is named
+   "Material Symbols Rounded" (confirmed via document.fonts), not
+   "...Outlined" - using the wrong name here is what broke the icon. */
 [data-testid="stIconMaterial"] {
-    font-family: "Material Symbols Outlined" !important;
+    font-family: "Material Symbols Rounded" !important;
 }
 
 [data-testid="stSidebar"] {
