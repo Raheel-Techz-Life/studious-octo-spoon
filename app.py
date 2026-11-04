@@ -116,6 +116,16 @@ FACE_HAND_LEGEND = [
     ("Same pinch, held near your mouth", "Floating hearts"),
 ]
 
+MODE_LEGENDS = {
+    "navigation": (NAVIGATION_LEGEND, "Navigation mode actions"),
+    "mouse": (MOUSE_LEGEND, "Mouse mode actions"),
+    "keyboard": (KEYBOARD_LEGEND, "Keyboard mode actions"),
+    "launcher": (LAUNCHER_LEGEND, "Launcher mode actions"),
+    "magic": (MAGIC_LEGEND, "Magic mode actions"),
+    "expressive": (EXPRESSIVE_LEGEND, "Expressive mode actions"),
+    "face_hand": (FACE_HAND_LEGEND, "Face+Hand mode actions"),
+}
+
 st.set_page_config(page_title="GestureBridge", page_icon="🖐️", layout="wide")
 st.markdown(CSS, unsafe_allow_html=True)
 
@@ -536,7 +546,6 @@ def live_fragment() -> None:
                     components.pill(f"Dynamic: {dyn.name.replace('_', ' ').title()}", "ok"),
                     unsafe_allow_html=True,
                 )
-            components.action_legend(NAVIGATION_LEGEND, "Navigation mode actions")
 
         elif snap.mode == "mouse":
             ms = snap.mouse_status
@@ -550,7 +559,6 @@ def live_fragment() -> None:
                     st.markdown(components.pill(ms.last_action.replace("_", " ").title(), "ok"),
                                 unsafe_allow_html=True)
             st.caption(f"Engine FPS: {snap.fps:.0f}")
-            components.action_legend(MOUSE_LEGEND, "Mouse mode actions")
 
         elif snap.mode == "keyboard":
             ks = snap.keyboard_status
@@ -568,7 +576,6 @@ def live_fragment() -> None:
                 if recent:
                     st.markdown(components.pill(ks.last_selected_key.replace("CHAR_", ""), "ok"),
                                 unsafe_allow_html=True)
-            components.action_legend(KEYBOARD_LEGEND, "Keyboard mode actions")
             if ks is not None:
                 components.keyboard_panel(
                     engine.keyboard_controller.layout, ks.highlighted_key, ks.pinching,
@@ -599,7 +606,6 @@ def live_fragment() -> None:
             else:
                 components.launcher_panel(entries, ls.highlighted_app_id if ls else None,
                                            ls.pinching if ls else False)
-            components.action_legend(LAUNCHER_LEGEND, "Launcher mode actions")
 
         elif snap.mode == "magic":
             ms = snap.magic_status
@@ -612,7 +618,6 @@ def live_fragment() -> None:
                     st.markdown(components.pill("Casting!", "ok"), unsafe_allow_html=True)
             if ms and not ms.tracking:
                 st.caption("Show your hand to the camera, then trace a full circle to cast.")
-            components.action_legend(MAGIC_LEGEND, "Magic mode actions")
 
         elif snap.mode == "expressive":
             es = snap.expressive_status
@@ -632,7 +637,6 @@ def live_fragment() -> None:
                 f"{s.icon} {s.display_name}" for s in engine.expressive_engine.registry.signs if s.enabled
             )
             st.caption(f"Registered signs: {registry_list or 'none enabled'}")
-            components.action_legend(EXPRESSIVE_LEGEND, "Expressive mode actions")
 
         elif snap.mode == "face_hand":
             fh = snap.face_hand_status
@@ -655,7 +659,6 @@ def live_fragment() -> None:
                 elif not fh.face_tracking:
                     st.caption("Show your face to the camera for the kiss effect "
                                "(finger-heart works with just your hand).")
-            components.action_legend(FACE_HAND_LEGEND, "Face+Hand mode actions")
 
         elif snap.mode == "paused":
             st.info("Tracking is paused. No commands or pointer actions will fire.")
@@ -671,6 +674,9 @@ def slow_fragment() -> None:
     # together looked like the whole section was flickering). Giving them
     # their own, much slower fragment keeps the live feed's own updates
     # smooth without losing live-ish event history.
+    legend = MODE_LEGENDS.get(st.session_state.mode)
+    if legend is not None:
+        components.action_legend(*legend)
     render_demo_panel()
     render_history_and_analytics()
 
