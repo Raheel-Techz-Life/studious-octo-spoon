@@ -139,7 +139,8 @@ def init_state() -> None:
         "mouse_drag_enabled": True,
         "mouse_scroll_enabled": True,
         # Keyboard mode settings
-        "keyboard_smoothing": 0.25,  # lower = calmer cursor; shaky hands need more damping than Mouse mode's default
+        "keyboard_smoothing": 0.45,  # majority-vote key selection already absorbs shaky release jitter,
+        # so this can stay snappy rather than trading responsiveness for smoothing
         "keyboard_mirror": True,
         # Launcher mode settings
         "launcher_smoothing": 0.4,
@@ -479,24 +480,32 @@ def live_fragment() -> None:
         if snap.frame_rgb is None:
             frame_placeholder.info("Starting camera... this can take a few seconds.")
         if snap.frame_rgb is not None:
-            display_frame = snap.frame_rgb
-            if snap.mode == "mouse" and snap.mouse_status and snap.mouse_status.pointer_norm:
-                active = snap.mouse_status.state in ("pinched", "dragging")
-                display_frame = _draw_pointer_overlay(snap.frame_rgb, snap.mouse_status.pointer_norm, active)
-            elif snap.mode == "keyboard" and snap.keyboard_status and snap.keyboard_status.pointer_norm:
-                display_frame = _draw_pointer_overlay(
-                    snap.frame_rgb, snap.keyboard_status.pointer_norm, snap.keyboard_status.pinching)
-            elif snap.mode == "launcher" and snap.launcher_status and snap.launcher_status.pointer_norm:
-                display_frame = _draw_pointer_overlay(
-                    snap.frame_rgb, snap.launcher_status.pointer_norm, snap.launcher_status.pinching)
-            elif snap.mode == "magic" and snap.magic_status:
-                display_frame = draw_magic_overlay(snap.frame_rgb, snap.magic_status)
-            elif snap.mode == "expressive" and snap.expressive_status:
-                display_frame = draw_expressive_overlay(snap.frame_rgb, snap.expressive_status)
-            elif snap.mode == "face_hand" and snap.face_hand_status:
-                display_frame = draw_face_hand_overlay(snap.frame_rgb, snap.face_hand_status)
-            display_frame = _downscale_for_display(display_frame)
-            frame_placeholder.image(display_frame, channels="RGB", use_container_width=True)
+            try:
+                display_frame = snap.frame_rgb
+                if snap.mode == "mouse" and snap.mouse_status and snap.mouse_status.pointer_norm:
+                    active = snap.mouse_status.state in ("pinched", "dragging")
+                    display_frame = _draw_pointer_overlay(snap.frame_rgb, snap.mouse_status.pointer_norm, active)
+                elif snap.mode == "keyboard" and snap.keyboard_status and snap.keyboard_status.pointer_norm:
+                    display_frame = _draw_pointer_overlay(
+                        snap.frame_rgb, snap.keyboard_status.pointer_norm, snap.keyboard_status.pinching)
+                elif snap.mode == "launcher" and snap.launcher_status and snap.launcher_status.pointer_norm:
+                    display_frame = _draw_pointer_overlay(
+                        snap.frame_rgb, snap.launcher_status.pointer_norm, snap.launcher_status.pinching)
+                elif snap.mode == "magic" and snap.magic_status:
+                    display_frame = draw_magic_overlay(snap.frame_rgb, snap.magic_status)
+                elif snap.mode == "expressive" and snap.expressive_status:
+                    display_frame = draw_expressive_overlay(snap.frame_rgb, snap.expressive_status)
+                elif snap.mode == "face_hand" and snap.face_hand_status:
+                    display_frame = draw_face_hand_overlay(snap.frame_rgb, snap.face_hand_status)
+                display_frame = _downscale_for_display(display_frame)
+                frame_placeholder.image(display_frame, channels="RGB", use_container_width=True)
+            except Exception as exc:  # noqa: BLE001
+                # An overlay-drawing bug must never take the whole video feed
+                # down silently - recognition/commands keep working on the
+                # background thread regardless, so without this the symptom
+                # looks exactly like "the camera stopped" when only this
+                # frame's display failed.
+                frame_placeholder.error(f"Couldn't render this frame: {exc}")
 
         if snap.mode == "navigation":
             with status_col1:
